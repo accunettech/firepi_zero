@@ -76,10 +76,14 @@ apt-get install -y \
   python3 \
   python3-venv \
   python3-pip \
+  python3-opencv \
   git \
   alsa-utils \
   mpg123 \
-  sox
+  sox \
+  python3-picamera2 \
+  libcamera-apps \
+
 
 # ---------- disable pigpiod (avoids I2S conflicts) ----------
 echo "==> Disabling pigpiod (if present)..."
