@@ -1,7 +1,8 @@
-from flask import Blueprint, current_app, render_template, jsonify, request
+from flask import Blueprint, current_app, render_template, jsonify, request, send_file
 import threading
 from db import db, Recipient, AlertHistory, alert_history_as_dict, get_or_create_settings
 from services.audio import list_audio_files, save_upload, ensure_exists, serve_file, get_system_volume, set_system_volume
+from services import admin_ops
 
 bp = Blueprint("config_ui", __name__)
 
@@ -486,3 +487,61 @@ def api_panel_debug_decode():
         "leds": led_states,
         "preview_jpeg_b64": preview_b64
     })
+
+# ---------- Administration UI ----------
+@bp.route("/admin")
+def admin_page():
+    return render_template("admin.html")
+
+# ---------- Admin APIs ----------
+
+@bp.get("/api/admin/log/tail")
+def admin_log_tail():
+    try:
+        n = int(request.args.get("lines", "50"))
+    except ValueError:
+        n = 50
+    text = admin_ops.get_log_tail_text(current_app, n)
+    return jsonify({"text": text})
+
+@bp.get("/api/admin/log/download")
+def admin_log_download():
+    p = admin_ops.log_file_path(current_app)
+    if not p.exists():
+        return jsonify({"error": "Log file not found"}), 404
+    # Force download with a stable filename
+    return send_file(str(p), as_attachment=True, download_name=p.name, mimetype="text/plain")
+
+@bp.get("/api/admin/version")
+def admin_version():
+    cur = admin_ops.get_current_version(current_app)
+    latest, err = admin_ops.get_latest_version_online()
+    return jsonify({
+        "current": cur,
+        "latest": latest or None,
+        "error": err or None,
+        "repo": admin_ops.REPO_SLUG,
+    })
+
+@bp.post("/api/admin/update")
+def admin_update():
+    ok, logs = admin_ops.update_from_github(current_app)
+    return jsonify({
+        "status": "ok" if ok else "error",
+        "log": logs,
+        "next_step": "reboot" if ok else None
+    }), (200 if ok else 500)
+
+@bp.post("/api/admin/rollback")
+def admin_rollback():
+    ok, logs = admin_ops.rollback_from_backup(current_app)
+    return jsonify({
+        "status": "ok" if ok else "error",
+        "log": logs,
+        "next_step": "reboot" if ok else None
+    }), (200 if ok else 500)
+
+@bp.post("/api/admin/reboot")
+def admin_reboot():
+    ok, msg = admin_ops.reboot_system()
+    return jsonify({"status": "ok" if ok else "error", "message": msg}), (200 if ok else 500)

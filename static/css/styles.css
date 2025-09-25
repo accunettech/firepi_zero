@@ -187,3 +187,19 @@ body { background:var(--bg); color:var(--ink); color-scheme:dark; }
 #recipientsTable .btn .bi {
   color: currentColor !important;
 }
+
+/* --- Admin page --- */
+.logbox {
+  background: #0f1115;
+  color: #cbd5e1;
+  border-radius: .5rem;
+  padding: .75rem 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 240px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.875rem;
+  line-height: 1.3;
+}

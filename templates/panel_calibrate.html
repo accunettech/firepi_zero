@@ -47,6 +47,10 @@
            class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
           <i class="bi bi-gear me-2"></i>Configuration
         </a>
+        <a href="{{ url_for('config_ui.admin_page') }}"
+           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
+        <i class="bi bi-tools me-2"></i>Administration
+      </a>
       </div>
     </aside>
 
