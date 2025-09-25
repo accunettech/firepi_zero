@@ -1,10 +1,54 @@
-import os, atexit
-import logging
+import os, atexit, signal, logging, threading
 from flask import Flask, jsonify
+from logging.handlers import TimedRotatingFileHandler
 from db import db, init_db
 from blueprints.config_ui import bp as config_ui_bp
 from services.solenoid_monitor import SolenoidMonitor
 from services.panel_monitor import PanelMonitor
+
+
+def configure_logging():
+    level = os.getenv("FIREPI_LOG_LEVEL", "INFO").upper()
+    log_dir = os.getenv("FIREPI_LOG_DIR") or os.path.join(os.path.dirname(__file__), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "app.log")
+
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    # avoid duplicate handlers if reloaded
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(threadName)s: %(message)s",
+        "%Y-%m-%d %H:%M:%S",
+    )
+
+    file_h = TimedRotatingFileHandler(
+        log_path,
+        when="midnight",       # rotate every day
+        backupCount=30,        # keep 30 files
+        encoding="utf-8",
+        delay=True,            # create file lazily on first write
+        utc=False,             # rotate at local midnight
+    )
+    file_h.setFormatter(fmt)
+    file_h.setLevel(level)
+    root.addHandler(file_h)
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    console.setLevel(level)
+    root.addHandler(console)
+
+def _graceful_shutdown(signum, frame):
+    logging.info("Received signal %s -> graceful shutdown", signum)
+    try:
+        if hasattr(app, "cleanup_monitors"):
+            app.cleanup_monitors()
+    finally:
+        raise SystemExit(0)
 
 def create_app() -> Flask:
     app = Flask(__name__)
@@ -65,16 +109,28 @@ def create_app() -> Flask:
             )
             app.extensions["panel_monitor"] = pm
 
+        def _cleanup_monitors():
+            app.logger.info("Cleanup: stopping monitors")
+            for key in ("panel_monitor", "solenoid_monitor"):
+                mon = app.extensions.get(key)
+                if mon and hasattr(mon, "stop"):
+                    try:
+                        mon.stop()
+                    except Exception:
+                        app.logger.exception("Error stopping %s", key)
+
+        app.cleanup_monitors = _cleanup_monitors
+
         # Start only in the actual serving process (not the reloader parent)
         if not sm.started and (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug):
             app.logger.info("Starting solenoid monitor...")
             sm.start()
-            atexit.register(sm.stop)
+            atexit.register(_cleanup_monitors)
         
         if not pm.started and (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug):
             app.logger.info("Starting panel monitor...")
             pm.start()
-            atexit.register(pm.stop)
+            atexit.register(_cleanup_monitors)
     except Exception as e:
         logging.exception("Solenoid monitor not started: %s", e)
 
@@ -82,5 +138,8 @@ def create_app() -> Flask:
 
 
 if __name__ == "__main__":
+    configure_logging()
     app = create_app()
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT,  _graceful_shutdown)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False, threaded=False, use_reloader=False)

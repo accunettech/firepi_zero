@@ -2,32 +2,24 @@
 set -euo pipefail
 
 # ============================================
-# FirePi setup
-# - Installs OS deps (python, alsa-utils, mpg123, sox, git)
-# - Enables I2S DAC overlay (default: hifiberry-dac) & disables onboard audio
-# - Writes /etc/asound.conf with softvol "PCM" + mono->stereo route
-# - Disables pigpiod (avoids I2S conflicts)
-# - Creates & enables a systemd unit for the app (not started until reboot)
+# FirePi setup: OS deps, I2S audio, Python venv, systemd unit
 # ============================================
 
-# Defaults (override with flags)
 APP_DIR="$(pwd)"
 SERVICE_NAME="firepi"
-OVERLAY="hifiberry-dac"    # I2S overlay for HiFiBerry DAC class devices
-PYTHON_BIN=""              # autodetect venv or /usr/bin/python3
+OVERLAY="hifiberry-dac"
+CARD_ID=""
+PYTHON_BIN="/usr/bin/python3"
 
 print_usage() {
   cat <<EOF
-Usage: sudo bash $0 [--app-dir PATH] [--service-name NAME] [--overlay NAME]
+Usage: sudo bash $0 [--app-dir PATH] [--service-name NAME] [--overlay NAME] [--card-id ALSA_ID]
 
 Options:
   --app-dir PATH        Path to your app directory (contains app.py). Default: current directory
   --service-name NAME   Systemd unit name (NAME.service). Default: firepi
   --overlay NAME        I2S overlay to enable. Default: hifiberry-dac
-
-Examples:
-  sudo bash $0 --app-dir /home/pi/firepi
-  sudo bash $0 --app-dir /home/pi/firepi --overlay hifiberry-dac
+  --card-id ALSA_ID     ALSA card ID for default output (e.g., sndrpihifiberry). Default: auto-detect (fallback -> sndrpihifiberry)
 EOF
 }
 
@@ -37,6 +29,7 @@ while [[ $# -gt 0 ]]; do
     --app-dir)       APP_DIR="$2"; shift 2 ;;
     --service-name)  SERVICE_NAME="$2"; shift 2 ;;
     --overlay)       OVERLAY="$2"; shift 2 ;;
+    --card-id)       CARD_ID="$2"; shift 2 ;;
     -h|--help)       print_usage; exit 0 ;;
     *) echo "Unknown arg: $1"; print_usage; exit 1 ;;
   esac
@@ -61,10 +54,16 @@ fi
 RUN_USER="${SUDO_USER:-$USER}"
 RUN_GROUP="$(id -gn "$RUN_USER")"
 
+run_as_user() {
+  # Run a command as the non-root runtime user with login shell
+  sudo -u "$RUN_USER" -H bash -lc "$*"
+}
+
 echo "==> Using:"
 echo "    APP_DIR        = $APP_DIR"
 echo "    SERVICE_NAME   = $SERVICE_NAME"
 echo "    OVERLAY        = $OVERLAY"
+echo "    CARD_ID (in)   = ${CARD_ID:-<auto>}"
 echo "    RUN_USER/GROUP = $RUN_USER:$RUN_GROUP"
 echo
 
@@ -73,17 +72,11 @@ echo "==> Installing OS packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y \
-  python3 \
-  python3-venv \
-  python3-pip \
-  python3-opencv \
-  git \
-  alsa-utils \
-  mpg123 \
-  sox \
-  python3-picamera2 \
-  libcamera-apps \
-
+  python3 python3-venv python3-pip git \
+  alsa-utils mpg123 sox libsox-fmt-mp3 \
+  python3-numpy python3-opencv \
+  python3-gpiozero python3-paho-mqtt \
+  python3-picamera2 libcamera-apps || true
 
 # ---------- disable pigpiod (avoids I2S conflicts) ----------
 echo "==> Disabling pigpiod (if present)..."
@@ -91,21 +84,13 @@ if systemctl list-unit-files | grep -q '^pigpiod\.service'; then
   systemctl disable --now pigpiod.service || true
 fi
 
-# ---------- pick python ----------
-if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
-  PYTHON_BIN="$APP_DIR/.venv/bin/python"
-else
-  PYTHON_BIN="/usr/bin/python3"
-fi
-echo "==> Python: $PYTHON_BIN"
-
 # ---------- ensure user in audio group ----------
 if ! id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx audio; then
   echo "==> Adding $RUN_USER to 'audio' group..."
   usermod -aG audio "$RUN_USER"
 fi
 
-# ---------- configure /boot/*/config.txt ----------
+# ---------- /boot/*/config.txt ----------
 CONFIG_TXT=""
 for f in /boot/firmware/config.txt /boot/config.txt; do
   if [[ -f "$f" ]]; then CONFIG_TXT="$f"; break; fi
@@ -118,66 +103,51 @@ fi
 echo "==> Updating $CONFIG_TXT (disable onboard audio, add overlay)..."
 cp -a "$CONFIG_TXT" "$CONFIG_TXT.bak.$(date +%Y%m%d-%H%M%S)"
 
-# Disable onboard audio
+# dtparam=audio=off
 if grep -Eq '^\s*dtparam=audio=' "$CONFIG_TXT"; then
   sed -i 's/^\s*dtparam=audio=.*/dtparam=audio=off/g' "$CONFIG_TXT"
 else
   echo "dtparam=audio=off" >> "$CONFIG_TXT"
 fi
 
-# Remove duplicates of this overlay, then add desired overlay
+# remove duplicates then add desired overlay
 sed -i "/^dtoverlay=${OVERLAY//\//\\/}/d" "$CONFIG_TXT"
 echo "dtoverlay=${OVERLAY}" >> "$CONFIG_TXT"
 
-# ---------- detect ALSA card index ----------
-detect_card() {
-  local idx="" id=""
+# ---------- detect ALSA card id (if not provided) ----------
+detect_card_id() {
+  local id=""
   if aplay -l >/tmp/aplay_list 2>/dev/null; then
-    # Prefer known I2S DACs
-    while IFS= read -r line; do
-      if [[ "$line" =~ ^card[[:space:]]+([0-9]+):[[:space:]]*([^[:space:]]+) ]]; then
-        local n="${BASH_REMATCH[1]}"
-        local ident="${BASH_REMATCH[2]}"
-        local lc
-        lc="$(echo "$ident" | tr '[:upper:]' '[:lower:]')"
-        if [[ "$lc" =~ sndrpihifiberry|hifiberry|iqaudio|pcm5102|i2s|max98357 ]]; then
-          idx="$n"; id="$ident"; break
-        fi
-      fi
-    done < /tmp/aplay_list
-
-    # Fallback: first card
-    if [[ -z "$idx" ]]; then
-      if [[ $(awk '/^card [0-9]+:/{print $2; exit}' /tmp/aplay_list) =~ ([0-9]+) ]]; then
-        idx="${BASH_REMATCH[1]}"
-      fi
-      id="$(awk -F'[:, ]+' '/^card [0-9]+:/{print $3; exit}' /tmp/aplay_list)"
-    fi
+    # Example: "card 0: sndrpihifiberry [snd_rpi_hifiberry_dac], device 0: ..."
+    id="$(awk -F'[:, ]+' '/^card [0-9]+:/ {print $3; exit}' /tmp/aplay_list)"
   fi
-  echo "${idx:-0}|${id:-unknown}"
+  echo "$id"
 }
 
-CARD_INDEX="0"
-CARD_ID="unknown"
-IFS='|' read -r CARD_INDEX CARD_ID <<<"$(detect_card)"
-echo "==> ALSA card index = $CARD_INDEX (id: $CARD_ID)"
+if [[ -z "$CARD_ID" ]]; then
+  CARD_ID="$(detect_card_id || true)"
+fi
+if [[ -z "$CARD_ID" ]]; then
+  CARD_ID="sndrpihifiberry"
+fi
+echo "==> ALSA CARD_ID (out) = $CARD_ID"
 
 # ---------- write /etc/asound.conf ----------
 ASOUND="/etc/asound.conf"
 echo "==> Writing $ASOUND ..."
 cp -a "$ASOUND" "$ASOUND.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
 
-cat >"$ASOUND" <<EOF
+cat >"$ASOUND" <<'EOF'
 # Auto-generated by FirePi setup
 
-# Hardware: I2S DAC (card ${CARD_INDEX}, device 0)
+# Hardware: HiFiBerry DAC (card 0, device 0)
 pcm.i2s_hw {
   type hw
-  card ${CARD_INDEX}
+  card 0
   device 0
 }
 
-# Route mono -> both channels (duplicate L to L+R)
+# Mono -> both channels (duplicate L to L/R)
 pcm.route_out {
   type route
   slave.pcm "i2s_hw"
@@ -186,23 +156,64 @@ pcm.route_out {
   ttable.0.1 1   # L -> R
 }
 
-# Software volume control "PCM" inserted on default path
-# (This creates a simple mixer control for amixer/our UI.)
+# Software volume control "PCM" in default path
 pcm.!default {
   type softvol
   slave.pcm "route_out"
-  control { name "PCM"; card ${CARD_INDEX} }
+  control { name "PCM"; card 0 }
   min_dB -51.0
   max_dB 0.0
 }
 
 ctl.!default {
   type hw
-  card ${CARD_INDEX}
+  card 0
 }
 EOF
 
-# ---------- create systemd unit (enabled, not started) ----------
+# ---------- Python venv (+ system site packages) ----------
+echo "==> Creating/refreshing Python venv with system site packages in ${APP_DIR}/.venv ..."
+chown -R "$RUN_USER:$RUN_GROUP" "$APP_DIR"
+
+LOG_DIR="/var/log/firepi"
+mkdir -p "$LOG_DIR"
+chown -R "$RUN_USER:$RUN_GROUP" "$LOG_DIR"
+
+VENV_DIR="${APP_DIR}/.venv"
+VENV_PY="${VENV_DIR}/bin/python"
+VENV_PIP="${VENV_DIR}/bin/pip"
+
+# (Re)create venv with --system-site-packages so apt-installed numpy/opencv are visible
+if [[ -d "$VENV_DIR" ]]; then
+  rm -rf "$VENV_DIR"
+fi
+run_as_user "$PYTHON_BIN -m venv --system-site-packages '$VENV_DIR'"
+
+# Upgrade pip tooling
+run_as_user "'$VENV_PY' -m pip install --upgrade pip setuptools wheel"
+
+# Install requirements
+if [[ -f "$APP_DIR/requirements.txt" ]]; then
+  echo "==> Installing requirements from requirements.txt ..."
+  # Tip: the venv can see apt OpenCV/NumPy; avoid pip wheels for those if present
+  run_as_user "'$VENV_PIP' install -r '$APP_DIR/requirements.txt'"
+else
+  echo "==> requirements.txt not found; installing minimal runtime set ..."
+  run_as_user "'$VENV_PIP' install 'Flask>=3,<4' 'Flask-SQLAlchemy>=3.1,<4' 'SQLAlchemy>=2,<3' 'PyYAML>=6,<7' 'paho-mqtt==1.6.1' 'twilio>=8,<9' 'clicksend-client==5.0.78' 'gpiozero>=1.6,<2'"
+fi
+
+# Quick import check for cv2 via venv (should resolve to system package)
+echo "==> Sanity check: importing cv2 via venv ..."
+if ! run_as_user "'$VENV_PY' - <<'PY'
+import cv2, numpy
+print('cv2:', cv2.__version__)
+print('numpy:', numpy.__version__)
+PY
+"; then
+  echo "WARNING: Could not import cv2/numpy inside the venv. Ensure python3-opencv and python3-numpy are installed." >&2
+fi
+
+# ---------- systemd unit ----------
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 echo "==> Writing ${UNIT_FILE} ..."
 cat >"$UNIT_FILE" <<EOF
@@ -217,11 +228,15 @@ User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${APP_DIR}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${PYTHON_BIN} ${APP_DIR}/app.py
+Environment=FIREPI_LOG_DIR=/var/log/firepi
+Environment=FIREPI_LOG_LEVEL=INFO
+ExecStart=${VENV_PY} -u app.py
 Restart=always
 RestartSec=2
 # Give ALSA init a moment after boot
 ExecStartPre=/bin/sleep 2
+KillMode=process
+TimeoutStopSec=10s
 
 [Install]
 WantedBy=multi-user.target
@@ -242,7 +257,7 @@ SELF_URL_IP="http://${HOST_IP}:5000/"
 # ---------- final notes ----------
 echo
 echo "=============================================================="
-echo "SETUP COMPLETE. A reboot is required for I²S overlay to apply."
+echo "SETUP COMPLETE. A reboot is recommended for I²S overlay to apply."
 echo "=============================================================="
 echo
 echo "Next steps:"
@@ -252,24 +267,27 @@ echo
 echo "  2) After reboot, verify audio device and service:"
 echo "       aplay -l"
 echo "       cat /etc/asound.conf"
-echo "       amixer -M scontrols         # should show 'Simple mixer control \"PCM\"'"
-echo "       amixer -M sget PCM          # get current volume"
 echo "       systemctl status ${SERVICE_NAME}.service"
 echo "       journalctl -u ${SERVICE_NAME}.service -b --no-pager"
 echo
 echo "  3) Audio test (use a wav):"
-echo "       aplay -D default /path/to/sound.wav"
-echo "    or mpg123 -q /path/to/sound.mp3"
+echo "       aplay /path/to/sound.wav"
 echo
 echo "  4) Open the app:"
 echo "       ${SELF_URL_HOST}"
-echo "    or ${SELF_URL_IP}"
+echo "       ${SELF_URL_IP}"
 echo
 echo "Changes made:"
-echo "  - Installed: python3-venv, python3-pip, alsa-utils, mpg123, sox, git"
+echo "  - Installed: python3-venv, python3-pip, alsa-utils, mpg123, sox, libsox-fmt-mp3,"
+echo "               python3-numpy, python3-opencv, python3-gpiozero, python3-paho-mqtt,"
+echo "               (python3-picamera2 + libcamera-apps if available)"
 echo "  - Disabled: pigpiod.service"
-echo "  - Updated:  ${CONFIG_TXT}  (dtparam=audio=off, dtoverlay=${OVERLAY})"
-echo "  - Wrote:    /etc/asound.conf  (softvol 'PCM', mono->stereo route, card index ${CARD_INDEX})"
-echo "  - Created:  ${UNIT_FILE}"
+echo "  - Updated:  ${CONFIG_TXT} (dtparam=audio=off, dtoverlay=${OVERLAY})"
+echo "  - Wrote:    /etc/asound.conf (card 0 with softvol 'PCM')"
+echo "  - Created:  ${UNIT_FILE} (service uses venv with system site packages)"
 echo "  - Enabled:  ${SERVICE_NAME}.service (starts on next boot)"
+echo
+echo "If ALSA card index differs after reboot, adjust /etc/asound.conf (card 0 -> your card index)"
+echo "or re-run:"
+echo "  sudo bash $0 --app-dir '${APP_DIR}' --service-name '${SERVICE_NAME}' --overlay '${OVERLAY}' --card-id <your_card_id>"
 echo
