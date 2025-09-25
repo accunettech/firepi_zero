@@ -1,0 +1,189 @@
+/* High-contrast dark theme */
+:root{
+  --bg:#0f172a; --panel:#111827; --panel-2:#1f2937;
+  --ink:#f1f5f9; --ink-soft:#e2e8f0; --ink-muted:#cbd5e1;
+  --field:#0b1220; --border:#64748b; --border-soft:#334155;
+  --brand:#0ea5e9; --brand-strong:#0284c7;
+}
+html, body { height:100%; }
+body { background:var(--bg); color:var(--ink); color-scheme:dark; }
+.navbar { background: linear-gradient(90deg,#0ea5e9,#6366f1); }
+.navbar .navbar-brand, .navbar .nav-link { color:#fff !important; }
+.card { border:0; border-radius:1rem; background:var(--panel); }
+.card-header { border:0; border-top-left-radius:1rem; border-top-right-radius:1rem; background:var(--panel-2); color:var(--ink); }
+.section-title { font-weight:700; letter-spacing:.3px; }
+.text-muted { color:var(--ink-muted) !important; }
+.footer { color:var(--ink-muted); }
+.form-label, .form-check-label, .table thead th { color:#fff; font-weight:600; }
+.form-control, .form-select { background-color:var(--field) !important; color:var(--ink) !important; border-color:var(--border) !important; }
+.form-control::placeholder { color:var(--ink-muted); opacity:.95; }
+.form-control:disabled, .form-control[readonly] { background-color:#0a1120 !important; color:var(--ink-muted) !important; }
+.form-control:focus, .form-select:focus { border-color:var(--brand) !important; box-shadow:0 0 0 .2rem rgba(14,165,233,.35) !important; color:var(--ink) !important; }
+.form-check-input { cursor:pointer; }
+.form-check-input:focus { box-shadow:0 0 0 .2rem rgba(14,165,233,.35) !important; }
+.table { color:var(--ink); }
+.table thead th { background:#0b1220; }
+.table tbody tr { border-color:var(--border-soft); }
+.table-hover > tbody > tr:hover > * { background-color: rgba(99,102,241,.12) !important; } /* indigo tint */
+.btn-primary { background:var(--brand-strong); border:none; color:#fff; }
+.btn-primary:hover { background:#0369a1; }
+.btn-outline-light { border-color:var(--border) !important; color:var(--ink) !important; }
+.btn-outline-light:hover { background-color:rgba(255,255,255,.08) !important; color:var(--ink) !important; border-color:var(--border) !important; }
+.badge-soft { background: rgba(99,102,241,.25); color:#fff; }
+.required::after { content:" *"; color:#f87171; }
+.toast.text-bg-dark { background-color:#0b1220 !important; color:var(--ink) !important; }
+.navbar-brand img { display:inline-block; vertical-align:middle; }
+.navbar-brand span { vertical-align:middle; }
+.table td, .table th { font-size:.95rem; }
+
+/* Ensure icons keep contrast on hover */
+.table-hover > tbody > tr:hover .btn .bi { color: inherit !important; }
+
+/* Enlarge logo + heading ~2x */
+.navbar-brand img { width:72px !important; height:72px !important; border-radius:.5rem; }
+.navbar-brand span { font-size:1.5rem !important; font-weight:800; letter-spacing:.2px; }
+
+/* Improve contrast in dark UI */
+.switch-title { color: var(--bs-light); font-weight: 600; }
+.switch-subtext { color: rgba(255,255,255,0.75); }
+
+/* Keep each switch group compact and left-aligned */
+.switch-tile { padding: .25rem 0; }
+
+/* Make the switch a touch larger and not jammed against the edge */
+.form-switch .form-check-input { transform: scale(1.05); margin-left: 0; }
+
+/* ensure horizontal scroll works on phones */
+.table-responsive { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+
+/* prevent columns from wrapping and getting too tall */
+.table-nowrap th, .table-nowrap td { white-space: nowrap; }
+
+/* give the table a minimum width on small screens so scrolling actually engages */
+@media (max-width: 576px) {
+  #recipientsTable { min-width: 620px; }
+}
+
+/* keep action buttons visible and usable */
+#recipientsTable td.text-end { padding-right: .75rem; }
+
+#healthBadge { font-weight: 700; letter-spacing: .2px; }
+.offcanvas.text-bg-dark .list-group-item { background: transparent; color: var(--ink); border-color: var(--border-soft); }
+.offcanvas.text-bg-dark .list-group-item:hover { background: rgba(99,102,241,.08); }
+.history-meta { color: var(--ink-muted); font-size: .85rem; }
+
+.section-divider {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255,255,255,.18),
+    transparent
+  );
+  border: 0;
+  opacity: 1;
+}
+
+.divider-space-sm { margin: 1rem 0; }
+.divider-space-md { margin: 1.75rem 0; }
+.divider-space-lg { margin: 2.5rem 0; }
+
+/* -------- Seven-seg display -------- */
+.sevenseg-group {
+  display: flex;
+  gap: .8rem;
+  padding: .25rem .5rem;
+}
+.sevenseg-digit {
+  position: relative;
+  width: 56px; height: 96px;
+  filter: drop-shadow(0 0 6px rgba(99,102,241,.25));
+}
+.sevenseg-digit .seg {
+  position: absolute; background: #1e293b; /* off */
+  transition: background .15s, box-shadow .15s, opacity .15s;
+  opacity: .35;
+}
+.sevenseg-digit .seg.on {
+  background: linear-gradient(180deg,#f43f5e,#ef4444);
+  opacity: 1;
+  box-shadow: 0 0 12px rgba(239,68,68,.65);
+}
+/* segment geometry */
+.sevenseg-digit .seg-a { top:6px; left:12px; right:12px; height:10px; border-radius:6px; }
+.sevenseg-digit .seg-d { bottom:6px; left:12px; right:12px; height:10px; border-radius:6px; }
+.sevenseg-digit .seg-g { top:calc(50% - 5px); left:12px; right:12px; height:10px; border-radius:6px; }
+.sevenseg-digit .seg-b { top:12px; right:6px; width:10px; height:calc(50% - 12px); border-radius:6px; }
+.sevenseg-digit .seg-c { bottom:12px; right:6px; width:10px; height:calc(50% - 12px); border-radius:6px; }
+.sevenseg-digit .seg-f { top:12px; left:6px; width:10px; height:calc(50% - 12px); border-radius:6px; }
+.sevenseg-digit .seg-e { bottom:12px; left:6px; width:10px; height:calc(50% - 12px); border-radius:6px; }
+
+/* -------- LED stack -------- */
+.led-stack .list-group-item { border-color: var(--border-soft); }
+.led-dot {
+  --led-size: 18px;
+  --led-color: #ef4444; /* red as base */
+  width: var(--led-size); height: var(--led-size);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, rgba(255,255,255,.15), rgba(0,0,0,.2)),
+              var(--led-color);
+  box-shadow: inset 0 0 8px rgba(0,0,0,.5);
+  filter: saturate(.4) brightness(.6);
+  transition: filter .15s, box-shadow .15s;
+}
+.led-dot.on {
+  filter: saturate(1.5) brightness(1.2);
+  box-shadow:
+    0 0 10px color-mix(in srgb, var(--led-color) 70%, transparent),
+    0 0 18px color-mix(in srgb, var(--led-color) 55%, transparent),
+    inset 0 0 6px rgba(0,0,0,.4);
+}
+
+/* compact card tint used in this page */
+.bg-dark-subtle {
+  background-color: rgba(148,163,184,.08);
+}
+
+/* --- Calibrate overlay --- */
+.calib-stage { position: relative; background:#0b1220; overflow: hidden; border:1px solid var(--border-soft); }
+.calib-stage img { display:block; width:100%; height:auto; user-select:none; -webkit-user-drag:none; }
+#calibCanvas { position:absolute; inset:0; }
+
+/* --- Side nav --- */
+.side-nav .list-group-item {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--border-soft);
+}
+.side-nav .list-group-item:hover {
+  background: rgba(99,102,241,.08);
+}
+.side-nav .list-group-item.active {
+  background: rgba(99,102,241,.25);
+  border-color: transparent;
+  color: #fff;
+}
+.sticky-top { top: 1rem; }
+/* --- Force dark/transparent table rows so light icons are visible --- */
+.table {
+  /* Make table cells inherit our dark theme colors */
+  --bs-table-color: var(--ink);
+  --bs-table-bg: transparent;
+  --bs-table-striped-color: var(--ink);
+  --bs-table-striped-bg: rgba(148,163,184,.06);   /* subtle stripe if you ever add .table-striped */
+  --bs-table-hover-color: var(--ink);
+  --bs-table-hover-bg: rgba(99,102,241,.12);      /* matches your existing hover tint */
+}
+
+/* Bootstrap sets cell backgrounds via this selector; override it */
+.table > :not(caption) > * > * {
+  background-color: transparent !important;
+}
+
+/* Keep borders consistent in dark theme */
+.table tbody tr { border-color: var(--border-soft); }
+
+/* Ensure the action icons always inherit the button color (even outside hover) */
+#recipientsTable .btn .bi {
+  color: currentColor !important;
+}

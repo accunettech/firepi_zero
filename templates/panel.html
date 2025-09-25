@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel Monitor</title>
+  <link href="{{ url_for('static', filename='css/bootstrap.5.3.3.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/font/bootstrap-icons.1.11.3.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
+  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/panel.js') }}"></script>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark mb-4">
+  <div class="container d-flex align-items-center justify-content-between">
+    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.index') }}">
+      <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}" alt="Ervin Glassworks" width="72" height="72" class="rounded-1">
+      <span>&nbsp;&nbsp;FirePi</span>
+    </a>
+    <div class="d-flex align-items-center gap-2">
+      <small class="text-muted d-none d-md-inline">Updated:</small>
+      <span id="panelUpdated" class="badge rounded-pill px-3 py-2 bg-secondary-subtle text-secondary-emphasis">—</span>
+      <button class="btn btn-outline-light btn-sm" id="btnReloadRois">
+        <i class="bi bi-arrow-clockwise me-1"></i>Reload ROIs
+      </button>
+    </div>
+  </div>
+</nav>
+
+<main class="container pb-5">
+  <div class="row">
+    <!-- Side navigation -->
+    <aside class="col-12 col-md-3 col-xl-2 mb-4">
+      <div class="list-group side-nav sticky-top">
+        <a href="{{ url_for('config_ui.index') }}"
+           class="list-group-item list-group-item-action {{ 'active' if request.path in ('/', '/panel') else '' }}"
+           aria-current="{{ 'page' if request.path in ('/', '/panel') else 'false' }}">
+          <i class="bi bi-speedometer2 me-2"></i>Panel
+        </a>
+        <a href="{{ url_for('config_ui.panel_calibrate') }}"
+           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}">
+          <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
+        </a>
+        <a href="{{ url_for('config_ui.config_page') }}"
+           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
+          <i class="bi bi-gear me-2"></i>Configuration
+        </a>
+      </div>
+    </aside>
+
+    <!-- Page content -->
+    <section class="col-12 col-md-9 col-xl-10">
+      <div id="panelError" class="alert alert-danger d-none" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        Unable to fetch panel status. Retrying…
+      </div>
+
+      <div class="row g-4">
+        <!-- LCDs -->
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header">
+              <div class="section-title">Digital Displays</div>
+              <small class="text-muted">Live OCR from the four seven-segment panels.</small>
+            </div>
+            <div class="card-body">
+              <div class="row g-4 row-cols-1 row-cols-md-2">
+                <!-- LCD 1 -->
+                <div class="col">
+                  <div class="p-3 rounded bg-dark-subtle">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <div class="fw-semibold">LCD #1</div>
+                      <span class="badge badge-soft">CH A</span>
+                    </div>
+                    <div id="lcd1" class="sevenseg-group" aria-label="LCD 1 value"></div>
+                  </div>
+                </div>
+                <!-- LCD 2 -->
+                <div class="col">
+                  <div class="p-3 rounded bg-dark-subtle">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <div class="fw-semibold">LCD #2</div>
+                      <span class="badge badge-soft">CH B</span>
+                    </div>
+                    <div id="lcd2" class="sevenseg-group" aria-label="LCD 2 value"></div>
+                  </div>
+                </div>
+                <!-- LCD 3 -->
+                <div class="col">
+                  <div class="p-3 rounded bg-dark-subtle">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <div class="fw-semibold">LCD #3</div>
+                      <span class="badge badge-soft">CH C</span>
+                    </div>
+                    <div id="lcd3" class="sevenseg-group" aria-label="LCD 3 value"></div>
+                  </div>
+                </div>
+                <!-- LCD 4 -->
+                <div class="col">
+                  <div class="p-3 rounded bg-dark-subtle">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <div class="fw-semibold">LCD #4</div>
+                      <span class="badge badge-soft">CH D</span>
+                    </div>
+                    <div id="lcd4" class="sevenseg-group" aria-label="LCD 4 value"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LED Stack -->
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header">
+              <div class="section-title">Status LEDs</div>
+              <small class="text-muted">Mirrors the column of LEDs on the Fireye panel.</small>
+            </div>
+            <div class="card-body">
+              <div class="row g-4 align-items-start">
+                <div class="col-12 col-lg-5">
+                  <ul class="list-group list-group-flush led-stack">
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                      <span class="fw-semibold">OPR CTRL</span>
+                      <span class="led-dot" id="led-opr_ctrl" aria-label="OPR CTRL LED"></span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                      <span class="fw-semibold">INTRLCK</span>
+                      <span class="led-dot" id="led-interlck" aria-label="Interlock LED"></span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                      <span class="fw-semibold">PTFI</span>
+                      <span class="led-dot" id="led-ptfi" aria-label="PTFI LED"></span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                      <span class="fw-semibold">FLAME</span>
+                      <span class="led-dot" id="led-flame" aria-label="Flame LED"></span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                      <span class="fw-semibold">ALARM</span>
+                      <span class="led-dot" id="led-alarm" aria-label="Alarm LED"></span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="col-12 col-lg-7">
+                  <div class="p-3 rounded-3 bg-dark-subtle">
+                    <div class="d-flex align-items-center gap-3 mb-2">
+                      <span class="led-dot on" style="--led-color:#22c55e"></span>
+                      <span class="text-muted small">LED ON (example)</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-3">
+                      <span class="led-dot" style="--led-color:#ef4444"></span>
+                      <span class="text-muted small">LED OFF (dimmed)</span>
+                    </div>
+                    <small class="text-muted d-block mt-3">
+                      LEDs update continuously; values come from HSV thresholding of the camera feed.
+                    </small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>
