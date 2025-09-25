@@ -4,3 +4,4 @@ instance/
 .venv
 .vscode/
 sync.sh
+.DS_Store
