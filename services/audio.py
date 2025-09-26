@@ -188,8 +188,6 @@ def get_system_volume() -> Optional[int]:
 
     return None
 
-
-
 def set_system_volume(percent: int) -> None:
     amixer = _amixer_path()
     if not amixer:
@@ -213,3 +211,24 @@ def set_system_volume(percent: int) -> None:
         f"Failed to set ALSA volume on any control ({', '.join(tried) or 'none'}); "
         f"your device may not expose a mixer. Last error: {last_err}"
     )
+
+def delete_audio(filename: str) -> tuple[bool, str | None]:
+    try:
+        fn = (filename or "").strip()
+        if not fn or "/" in fn or ".." in fn:
+            return False, "Invalid filename"
+
+        # Reuse your existing helper
+        p: Path = resolve_audio_path(fn)
+        # Double-check we're within the audio dir
+        audio_dir = Path(current_app.instance_path) / "audio"
+        if not str(p.resolve()).startswith(str(audio_dir.resolve())):
+            return False, "Refusing to delete outside audio dir"
+
+        if not p.exists() or not p.is_file():
+            return False, "File not found"
+
+        p.unlink()
+        return True, None
+    except Exception as e:
+        return False, str(e)

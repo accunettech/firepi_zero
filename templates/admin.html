@@ -1,136 +1,120 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Administration • FirePi</title>
-  <link href="{{ url_for('static', filename='css/bootstrap.5.3.3.min.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/font/bootstrap-icons.1.11.3.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
-  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
-</head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark mb-4">
-  <div class="container d-flex align-items-center justify-content-between">
-    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.index') }}">
-      <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}" alt="Ervin Glassworks" width="72" height="72" class="rounded-1">
-      <span>&nbsp;&nbsp;FirePi</span>
-    </a>
-    <div class="d-flex align-items-center gap-2">
-      <span id="healthBadge" class="badge rounded-pill px-3 py-2 bg-secondary-subtle text-secondary-emphasis">—</span>
-      <a class="btn btn-outline-light btn-sm" href="{{ url_for('config_ui.panel_page') }}">
-        <i class="bi bi-speedometer2 me-1"></i>Panel
-      </a>
+{% extends "base.html" %}
+{% block title %}FirePi – Administration{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div>
+          <div class="section-title">Update FirePi</div>
+          <small class="text-muted">
+            Current version:
+            <span class="badge bg-secondary-subtle text-secondary-emphasis" id="verCurrent">—</span>
+            &nbsp;&bull;&nbsp; Latest version:
+            <span class="badge bg-secondary-subtle text-secondary-emphasis" id="verLatest">—</span>
+          </small>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-light btn-sm" id="btnCheckLatest">
+            <i class="bi bi-search me-1"></i>Check Latest
+          </button>
+          <button class="btn btn-primary btn-sm" id="btnDoUpdate">
+            <i class="bi bi-arrow-up-circle me-1"></i>Update FirePi
+          </button>
+          <button class="btn btn-outline-warning btn-sm" id="btnRollback">
+            <i class="bi bi-arrow-counterclockwise me-1"></i>Rollback
+          </button>
+          <button class="btn btn-outline-danger btn-sm" id="btnReboot">
+            <i class="bi bi-power me-1"></i>Reboot
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <small class="text-muted d-block">
+          One backup is kept and overwritten on each update. If there is a problem with your update, roll back immediately.
+        </small>
+        <div id="updateStatus" class="mt-3 small text-muted"></div>
+      </div>
     </div>
   </div>
-</nav>
-<main class="container pb-5">
-  <div class="row">
-    <!-- Side navigation -->
-    <aside class="col-12 col-md-3 col-xl-2 mb-4">
-      <div class="list-group side-nav sticky-top">
-        <a href="{{ url_for('config_ui.index') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path in ('/', '/panel') else '' }}"
-           aria-current="{{ 'page' if request.path in ('/', '/panel') else 'false' }}">
-          <i class="bi bi-speedometer2 me-2"></i>Panel
-        </a>
-        <a href="{{ url_for('config_ui.panel_calibrate') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}">
-          <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
-        </a>
-        <a href="{{ url_for('config_ui.config_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
-          <i class="bi bi-gear me-2"></i>Configuration
-        </a>
-        <a href="{{ url_for('config_ui.admin_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
-          <i class="bi bi-tools me-2"></i>Administration
-        </a>
-      </div>
-    </aside>
-    <!-- Page content -->
-    <section class="col-12 col-md-9 col-xl-10">
-      <div class="row g-4">
-        <!-- Version / Update -->
-        <div class="col-12">
-          <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-              <div>
-                <div class="section-title">Version & Update</div>
-                <small class="text-muted">Compare installed vs GitHub (main) and update safely.</small>
-              </div>
-              <div>
-                <button class="btn btn-outline-light btn-sm me-2" id="btnCheckVersion">
-                  <i class="bi bi-arrow-repeat me-1"></i>Check
-                </button>
-                <button class="btn btn-primary btn-sm" id="btnUpdate">
-                  <i class="bi bi-cloud-arrow-down me-1"></i>Update FirePi
-                </button>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-md-4">
-                  <label class="form-label">Installed Version</label>
-                  <div id="verInstalled" class="form-control bg-dark-subtle text-light">—</div>
-                </div>
-                <div class="col-md-4">
-                  <label class="form-label">Latest on GitHub (main)</label>
-                  <div id="verLatest" class="form-control bg-dark-subtle text-light">—</div>
-                </div>
-                <div class="col-md-4">
-                  <label class="form-label">Repository</label>
-                  <div id="verRepo" class="form-control bg-dark-subtle text-light">accunettech/firepi_zero</div>
-                </div>
-              </div>
-              <div class="alert alert-warning d-flex align-items-center gap-2 mt-3" role="alert">
-                <i class="bi bi-exclamation-triangle-fill"></i>
-                <div>
-                  Update will create (or overwrite) a single backup archive, then reset code to <code>origin/main</code>.
-                  If requirements changed, it will install them into the venv. You’ll be prompted to reboot.
-                </div>
-              </div>
-              <div class="d-flex gap-2">
-                <button class="btn btn-outline-light btn-sm" id="btnRollback">
-                  <i class="bi bi-arrow-counterclockwise me-1"></i>Rollback to Backup
-                </button>
-                <button class="btn btn-outline-danger btn-sm ms-auto" id="btnReboot">
-                  <i class="bi bi-power me-1"></i>Reboot
-                </button>
-              </div>
-              <div class="mt-3">
-                <label class="form-label">Update Output</label>
-                <pre id="updateOutput" class="logbox"></pre>
-              </div>
-            </div>
-          </div>
+  <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+  <div class="col-12 col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <div class="section-title">Audio File Maintenance</div>
+          <small class="text-muted">Delete uploaded audio files.</small>
         </div>
-        <!-- Logs -->
-        <div class="col-12">
-          <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-              <div>
-                <div class="section-title">Logs</div>
-                <small class="text-muted">View the last 50 lines or download the full file.</small>
-              </div>
-              <div>
-                <a class="btn btn-outline-light btn-sm" id="btnDownloadLog" href="{{ url_for('config_ui.admin_log_download') }}">
-                  <i class="bi bi-download me-1"></i>Download Full Log
-                </a>
-                <button class="btn btn-outline-light btn-sm ms-2" id="btnRefreshLog">
-                  <i class="bi bi-arrow-repeat me-1"></i>Refresh
-                </button>
-              </div>
-            </div>
-            <div class="card-body">
-              <pre id="logTail" class="logbox">Loading…</pre>
-            </div>
-          </div>
-        </div>
+        <button class="btn btn-outline-light btn-sm" id="btnRefreshAudioAdmin">
+          <i class="bi bi-arrow-repeat"></i> Refresh
+        </button>
       </div>
-    </section>
+      <div class="card-body">
+        <div id="audioAdminEmpty" class="text-muted">No audio files uploaded.</div>
+        <ul id="audioAdminList" class="list-group list-group-flush"></ul>
+      </div>
+    </div>
   </div>
-</main>
-</body>
-</html>
+  <div class="col-12 col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header">
+        <div class="section-title">Support & Diagnostics</div>
+        <small class="text-muted">Create a bundle with logs, ROIs, version, and (optionally) a snapshot.</small>
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-outline-light" id="btnCreateBundle">
+            <i class="bi bi-archive me-1"></i>Create Bundle
+          </button>
+          <a class="btn btn-primary disabled" id="btnDownloadBundle" href="#" download
+            aria-disabled="true" tabindex="-1">
+            <i class="bi bi-download me-1"></i>Download Bundle
+          </a>
+          <button class="btn btn-outline-light" id="btnUploadBundle">
+            <i class="bi bi-upload me-1"></i>Upload Bundle
+          </button>
+          <button class="btn btn-outline-light" id="btnUploadSnapshot">
+            <i class="bi bi-cloud-upload me-1"></i>Upload Snapshot Only
+          </button>
+        </div>
+        <div class="mt-3">
+          <div class="form-check m-0">
+            <input class="form-check-input" type="checkbox" id="includeSnapshot" checked>
+            <label class="form-check-label" for="includeSnapshot">
+              Include latest camera snapshot in bundle
+            </label>
+          </div>
+        </div>
+        <div id="supportStatus" class="mt-2 small text-muted">
+          No bundle created yet.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div>
+          <div class="section-title">Logs</div>
+          <small class="text-muted">Showing last 50 lines of the current log.</small>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-light btn-sm" id="btnDownloadLog" href="#" download>
+            <i class="bi bi-download me-1"></i>Download Full Log
+          </a>
+          <button class="btn btn-outline-light btn-sm" id="btnRefreshLog">
+            <i class="bi bi-arrow-repeat me-1"></i>Refresh
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <textarea id="logTail" class="form-control font-monospace" rows="12" readonly style="white-space:pre; resize:vertical;"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

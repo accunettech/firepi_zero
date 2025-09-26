@@ -1,204 +1,141 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Panel Calibrate</title>
-  <link href="{{ url_for('static', filename='css/bootstrap.5.3.3.min.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/font/bootstrap-icons.1.11.3.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
-  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
-  <script defer src="{{ url_for('static', filename='js/panel_calibrate.js') }}"></script>
-</head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark mb-4">
-  <div class="container d-flex align-items-center justify-content-between">
-    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.index') }}">
-      <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}" alt="Ervin Glassworks" width="72" height="72" class="rounded-1">
-      <span>&nbsp;&nbsp;FirePi</span>
-    </a>
-    <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-outline-light btn-sm" id="btnSnapshot"><i class="bi bi-camera me-1"></i>Snapshot</button>
-      <button class="btn btn-outline-light btn-sm" id="btnReloadWorker"><i class="bi bi-arrow-repeat me-1"></i>Reload Worker</button>
-      <label for="testFile" class="btn btn-outline-light btn-sm mb-0">
-        <i class="bi bi-image me-1"></i>Test with photo
-      </label>
-      <input type="file" id="testFile" class="d-none" accept="image/*">
-      <button class="btn btn-primary btn-sm" id="btnSaveRois"><i class="bi bi-save2 me-1"></i>Save ROIs</button>
+{% extends "base.html" %}
+{% block title %}FirePi – Administration{% endblock %}
+{% block content %}
+<div id="calibError" class="alert alert-danger d-none" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i> Could not load snapshot/ROIs.
+</div>
+<div class="row g-4">
+  <div class="col-12 col-xl-8">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <div class="section-title">Camera Snapshot</div>
+          <small class="text-muted">Draw rectangles directly on the image.</small>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <small class="text-muted">Image: <span id="snapMeta">—</span></small>
+          <button class="btn btn-outline-light btn-sm" id="btnSnapshot">
+            <i class="bi bi-camera me-1"></i>Snapshot
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="calib-stage rounded-3">
+          <img id="snapImg" alt="Snapshot">
+          <canvas id="calibCanvas"></canvas>
+        </div>
+        <div class="text-muted small mt-2">Current rect: <span id="curRect">—</span></div>
+      </div>
     </div>
   </div>
-</nav>
-
-<main class="container pb-5">
-  <div class="row">
-    <!-- Side navigation -->
-    <aside class="col-12 col-md-3 col-xl-2 mb-4">
-      <div class="list-group side-nav sticky-top">
-        <a href="{{ url_for('config_ui.index') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path in ('/', '/panel') else '' }}">
-          <i class="bi bi-speedometer2 me-2"></i>Panel
-        </a>
-        <a href="{{ url_for('config_ui.panel_calibrate') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}"
-           aria-current="{{ 'page' if request.path.startswith('/panel/calibrate') else 'false' }}">
-          <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
-        </a>
-        <a href="{{ url_for('config_ui.config_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
-          <i class="bi bi-gear me-2"></i>Configuration
-        </a>
-        <a href="{{ url_for('config_ui.admin_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
-        <i class="bi bi-tools me-2"></i>Administration
-      </a>
+  <div class="col-12 col-xl-4">
+    <div class="card shadow-sm">
+      <div class="card-header">
+        <div class="section-title">Controls</div>
+        <small class="text-muted">Pick a target, then drag on the image.</small>
       </div>
-    </aside>
-
-    <!-- Page content -->
-    <section class="col-12 col-md-9 col-xl-10">
-      <div id="calibError" class="alert alert-danger d-none" role="alert">
-        <i class="bi bi-exclamation-triangle me-1"></i> Could not load snapshot/ROIs.
-      </div>
-
-      <!-- Row 1: snapshot + controls -->
-      <div class="row g-4">
-        <div class="col-12 col-xl-8">
-          <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-              <div>
-                <div class="section-title">Camera Snapshot</div>
-                <small class="text-muted">Draw rectangles directly on the image.</small>
-              </div>
-              <small class="text-muted">Image: <span id="snapMeta">—</span></small>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Target ROI</label>
+          <select id="roiTarget" class="form-select">
+            <optgroup label="LCDs">
+              <option value="lcd:lcd1">LCD 1</option>
+              <option value="lcd:lcd2">LCD 2</option>
+              <option value="lcd:lcd3">LCD 3</option>
+              <option value="lcd:lcd4">LCD 4</option>
+            </optgroup>
+            <optgroup label="LEDs">
+              <option value="led:opr_ctrl">OPR CTRL</option>
+              <option value="led:interlck">INTRLCK</option>
+              <option value="led:ptfi">PTFI</option>
+              <option value="led:flame">FLAME</option>
+              <option value="led:alarm">ALARM</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">7-Seg Threshold (<span id="segThrVal">0.55</span>)</label>
+          <input id="segThr" type="range" class="form-range" min="0.30" max="0.80" step="0.01" value="0.55">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Digits per LCD</label>
+          <input id="digitCount" type="number" class="form-control" min="1" max="6" value="4">
+        </div>
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" id="lcdInverted">
+          <label class="form-check-label" for="lcdInverted">LCD is inverted (lit segments are darker)</label>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">LED Sat/Val thresholds</label>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small">Saturation</label>
+              <input id="ledSat" type="range" class="form-range" min="50" max="200" step="1">
             </div>
-            <div class="card-body">
-              <div class="calib-stage rounded-3">
-                <img id="snapImg" alt="Snapshot">
-                <canvas id="calibCanvas"></canvas>
-              </div>
-              <div class="text-muted small mt-2">Current rect: <span id="curRect">—</span></div>
+            <div class="col-6">
+              <label class="form-label small">Value</label>
+              <input id="ledVal" type="range" class="form-range" min="50" max="200" step="1">
             </div>
           </div>
         </div>
-
-        <div class="col-12 col-xl-4">
-          <div class="card shadow-sm">
-            <div class="card-header">
-              <div class="section-title">Controls</div>
-              <small class="text-muted">Pick a target, then drag on the image.</small>
-            </div>
-            <div class="card-body">
-              <div class="mb-3">
-                <label class="form-label">Target ROI</label>
-                <select id="roiTarget" class="form-select">
-                  <optgroup label="LCDs">
-                    <option value="lcd:lcd1">LCD 1</option>
-                    <option value="lcd:lcd2">LCD 2</option>
-                    <option value="lcd:lcd3">LCD 3</option>
-                    <option value="lcd:lcd4">LCD 4</option>
-                  </optgroup>
-                  <optgroup label="LEDs">
-                    <option value="led:opr_ctrl">OPR CTRL</option>
-                    <option value="led:interlck">INTRLCK</option>
-                    <option value="led:ptfi">PTFI</option>
-                    <option value="led:flame">FLAME</option>
-                    <option value="led:alarm">ALARM</option>
-                  </optgroup>
-                </select>
-              </div>
-
-              <div class="mb-3">
-                <label class="form-label">7-Seg Threshold (<span id="segThrVal">0.55</span>)</label>
-                <input id="segThr" type="range" class="form-range" min="0.30" max="0.80" step="0.01" value="0.55">
-              </div>
-
-              <div class="mb-3">
-                <label class="form-label">Digits per LCD</label>
-                <input id="digitCount" type="number" class="form-control" min="1" max="6" value="4">
-              </div>
-
-              <div class="form-check form-switch mb-3">
-                <input class="form-check-input" type="checkbox" id="lcdInverted">
-                <label class="form-check-label" for="lcdInverted">LCD is inverted (lit segments are darker)</label>
-              </div>
-
-              <div class="mb-3">
-                <label class="form-label">LED Sat/Val thresholds</label>
-                <div class="row g-2">
-                  <div class="col-6">
-                    <label class="form-label small">Saturation</label>
-                    <input id="ledSat" type="range" class="form-range" min="50" max="200" step="1">
-                  </div>
-                  <div class="col-6">
-                    <label class="form-label small">Value</label>
-                    <input id="ledVal" type="range" class="form-range" min="50" max="200" step="1">
-                  </div>
-                </div>
-              </div>
-
-              <div class="alert alert-secondary small">
-                Click <strong>Snapshot</strong>, choose a <strong>Target ROI</strong>, draw the rectangle, then <strong>Save ROIs</strong>.
-              </div>
-            </div>
-          </div>
+        <div class="alert alert-secondary small">
+          Click <strong>Snapshot</strong>, choose a <strong>Target ROI</strong>, draw the rectangle, then <strong>Save ROIs</strong>.
         </div>
       </div>
-
-      <!-- Row 2: dry-run results -->
-      <div class="row g-4 mt-1">
-        <div class="col-12">
-          <div class="card shadow-sm">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <div>
-                <div class="section-title">Dry-Run Result (Uploaded Photo)</div>
-                <small class="text-muted">Decoded values using current ROIs & thresholds.</small>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="row g-4">
-                <div class="col-12 col-lg-6">
-                  <div class="mb-3">
-                    <div class="fw-semibold mb-2">Digital Displays</div>
-                    <div id="testLcd1" class="sevenseg-group"></div>
-                    <div id="testLcd2" class="sevenseg-group mt-2"></div>
-                    <div id="testLcd3" class="sevenseg-group mt-2"></div>
-                    <div id="testLcd4" class="sevenseg-group mt-2"></div>
-                  </div>
-                  <div>
-                    <div class="fw-semibold mb-2">Status LEDs</div>
-                    <ul class="list-group list-group-flush led-stack">
-                      <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                        <span class="fw-semibold">OPR CTRL</span><span class="led-dot" id="test-led-opr_ctrl"></span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                        <span class="fw-semibold">INTRLCK</span><span class="led-dot" id="test-led-interlck"></span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                        <span class="fw-semibold">PTFI</span><span class="led-dot" id="test-led-ptfi"></span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                        <span class="fw-semibold">FLAME</span><span class="led-dot" id="test-led-flame"></span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                        <span class="fw-semibold">ALARM</span><span class="led-dot" id="test-led-alarm"></span>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-
-                <div class="col-12 col-lg-6">
-                  <div class="fw-semibold mb-2">Annotated Preview</div>
-                  <img id="testPreview" class="img-fluid rounded-3 border border-secondary" alt="Annotated preview">
-                  <small class="text-muted d-block mt-2">Boxes are drawn at current ROIs (green=ON, red=OFF for LEDs).</small>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </section>
+    </div>
   </div>
-</main>
-</body>
-</html>
+</div>
+<div class="row g-4 mt-1">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div>
+          <div class="section-title">Dry-Run Result (Uploaded Photo)</div>
+          <small class="text-muted">Decoded values using current ROIs & thresholds.</small>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row g-4">
+          <div class="col-12 col-lg-6">
+            <div class="mb-3">
+              <div class="fw-semibold mb-2">Digital Displays</div>
+              <div id="testLcd1" class="sevenseg-group"></div>
+              <div id="testLcd2" class="sevenseg-group mt-2"></div>
+              <div id="testLcd3" class="sevenseg-group mt-2"></div>
+              <div id="testLcd4" class="sevenseg-group mt-2"></div>
+            </div>
+            <div>
+              <div class="fw-semibold mb-2">Status LEDs</div>
+              <ul class="list-group list-group-flush led-stack">
+                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                  <span class="fw-semibold">OPR CTRL</span><span class="led-dot" id="test-led-opr_ctrl"></span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                  <span class="fw-semibold">INTRLCK</span><span class="led-dot" id="test-led-interlck"></span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                  <span class="fw-semibold">PTFI</span><span class="led-dot" id="test-led-ptfi"></span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                  <span class="fw-semibold">FLAME</span><span class="led-dot" id="test-led-flame"></span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                  <span class="fw-semibold">ALARM</span><span class="led-dot" id="test-led-alarm"></span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div class="col-12 col-lg-6">
+            <div class="fw-semibold mb-2">Annotated Preview</div>
+            <img id="testPreview" class="img-fluid rounded-3 border border-secondary" alt="Annotated preview">
+            <small class="text-muted d-block mt-2">Boxes are drawn at current ROIs (green=ON, red=OFF for LEDs).</small>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/panel_calibrate.js') }}"></script>
+{% endblock %}

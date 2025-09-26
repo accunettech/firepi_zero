@@ -1,408 +1,329 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Alerting Configuration Panel</title>
-  <link href="{{ url_for('static', filename='css/bootstrap.5.3.3.min.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/font/bootstrap-icons.1.11.3.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
-  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/config.js') }}"></script>
-</head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark mb-4">
-  <div class="container d-flex align-items-center justify-content-between">
-    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.index') }}">
-      <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}" alt="Ervin Glassworks" width="72" height="72" class="rounded-1">
-      <span>&nbsp;&nbsp;FirePi</span>
-    </a>
-    <div class="d-flex align-items-center gap-2">
-      <span id="healthBadge" class="badge rounded-pill px-3 py-2 bg-secondary-subtle text-secondary-emphasis">—</span>
-      <button class="btn btn-outline-light btn-sm" id="btnOpenHistory"
-              data-bs-toggle="offcanvas" data-bs-target="#historyDrawer">
-        <i class="bi bi-activity me-1"></i>History
-      </button>
+{% extends "base.html" %}
+{% block title %}FirePi – Configuration{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-12 col-xxl-6">
+    <div class="card shadow-sm">
+      <div class="card-header">
+        <div class="section-title">Global Notification Controls</div>
+        <small class="text-muted">Enable/disable specific notification types for all recipients.</small>
+      </div>
+      <div class="card-body">
+        <div class="row gy-3 gx-4">
+          <div class="col-12 col-md-6">
+            <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
+              <input class="form-check-input mt-1" type="checkbox" id="enablePhoneAlert">
+              <label class="form-check-label" for="enablePhoneAlert">
+                <span class="switch-title">Phone Calls</span>
+                <small class="switch-subtext d-block">Enable all voice call alerts</small>
+              </label>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
+              <input class="form-check-input mt-1" type="checkbox" id="enableEmailAlert">
+              <label class="form-check-label" for="enableEmailAlert">
+                <span class="switch-title">Emails</span>
+                <small class="switch-subtext d-block">Enable all email alerts</small>
+              </label>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
+              <input class="form-check-input mt-1" type="checkbox" id="enableSmsAlert">
+              <label class="form-check-label" for="enableSmsAlert">
+                <span class="switch-title">SMS Messages</span>
+                <small class="switch-subtext d-block">Enable all SMS alerts</small>
+              </label>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
+              <input class="form-check-input mt-1" type="checkbox" id="enableSpeakerAlert">
+              <label class="form-check-label" for="enableSpeakerAlert">
+                <span class="switch-title">Internal Speaker</span>
+                <small class="switch-subtext d-block">Enable alert from FirePi speaker</small>
+              </label>
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="d-flex justify-content-end gap-2">
+              <button class="btn btn-outline-light" id="btnTestNotifications">
+                <i class="bi bi-bell me-1"></i>Test Notifications
+              </button>
+              <button class="btn btn-primary" id="btnSaveToggles">
+                <i class="bi bi-save2 me-1"></i>Save Controls
+              </button>
+            </div>
+          </div>
+          <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+          <div class="col-12">
+            <hr class="my-2" />
+            <div class="row g-3 align-items-end">
+              <div class="col-sm-8 col-md-9">
+                <label class="form-label">Telephony Provider</label>
+                <select id="telephonyProvider" class="form-select">
+                  <option value="twilio">Twilio</option>
+                  <option value="clicksend">ClickSend</option>
+                </select>
+                <small class="text-muted">Choose the voice/SMS backend.</small>
+              </div>
+              <div class="col-sm-4 col-md-3 text-end">
+                <button class="btn btn-primary w-100" id="btnSaveProvider">
+                  <i class="bi bi-save2 me-1"></i>Save Provider
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-</nav>
-<main class="container pb-5">
-  <div class="row">
-    <!-- Side navigation -->
-    <aside class="col-12 col-md-3 col-xl-2 mb-4">
-      <div class="list-group side-nav sticky-top">
-        <a href="{{ url_for('config_ui.index') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path in ('/', '/panel') else '' }}"
-           aria-current="{{ 'page' if request.path in ('/', '/panel') else 'false' }}">
-          <i class="bi bi-speedometer2 me-2"></i>Panel
-        </a>
-        <a href="{{ url_for('config_ui.panel_calibrate') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}">
-          <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
-        </a>
-        <a href="{{ url_for('config_ui.config_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
-          <i class="bi bi-gear me-2"></i>Configuration
-        </a>
-        <a href="{{ url_for('config_ui.admin_page') }}"
-           class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
-          <i class="bi bi-tools me-2"></i>Administration
-        </a>
+  <div class="col-12 col-xxl-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header">
+        <div class="section-title">Audio Settings</div>
+        <small class="text-muted">Select sounds and upload new files</small>
       </div>
-    </aside>
-
-    <!-- Page content -->
-    <section class="col-12 col-md-9 col-xl-10">
-      <div class="row g-4">
-        <!-- Global Notification Toggles (left) -->
-        <div class="col-12 col-xxl-6">
-          <div class="card shadow-sm">
-            <div class="card-header">
-              <div class="section-title">Global Notification Controls</div>
-              <small class="text-muted">Enable/disable specific notification types for all recipients.</small>
-            </div>
-            <div class="card-body">
-              <div class="row gy-3 gx-4">
-                <!-- Phone -->
-                <div class="col-12 col-md-6">
-                  <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
-                    <input class="form-check-input mt-1" type="checkbox" id="enablePhoneAlert">
-                    <label class="form-check-label" for="enablePhoneAlert">
-                      <span class="switch-title">Phone Calls</span>
-                      <small class="switch-subtext d-block">Enable all voice call alerts</small>
-                    </label>
-                  </div>
-                </div>
-                <!-- Email -->
-                <div class="col-12 col-md-6">
-                  <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
-                    <input class="form-check-input mt-1" type="checkbox" id="enableEmailAlert">
-                    <label class="form-check-label" for="enableEmailAlert">
-                      <span class="switch-title">Emails</span>
-                      <small class="switch-subtext d-block">Enable all email alerts</small>
-                    </label>
-                  </div>
-                </div>
-                <!-- Text -->
-                <div class="col-12 col-md-6">
-                  <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
-                    <input class="form-check-input mt-1" type="checkbox" id="enableSmsAlert">
-                    <label class="form-check-label" for="enableSmsAlert">
-                      <span class="switch-title">SMS Messages</span>
-                      <small class="switch-subtext d-block">Enable all SMS alerts</small>
-                    </label>
-                  </div>
-                </div>
-                <!-- Internal Speaker -->
-                <div class="col-12 col-md-6">
-                  <div class="form-check form-switch d-flex align-items-start gap-3 switch-tile">
-                    <input class="form-check-input mt-1" type="checkbox" id="enableSpeakerAlert">
-                    <label class="form-check-label" for="enableSpeakerAlert">
-                      <span class="switch-title">Internal Speaker</span>
-                      <small class="switch-subtext d-block">Enable alert from FirePi speaker</small>
-                    </label>
-                  </div>
-                </div>
-                <!-- Actions -->
-                <div class="col-12">
-                  <div class="d-flex justify-content-end gap-2">
-                    <button class="btn btn-outline-light" id="btnTestNotifications">
-                      <i class="bi bi-bell me-1"></i>Test Notifications
-                    </button>
-                    <button class="btn btn-primary" id="btnSaveToggles">
-                      <i class="bi bi-save2 me-1"></i>Save Controls
-                    </button>
-                  </div>
-                </div>
-                <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
-                <!-- Provider select + save -->
-                <div class="col-12">
-                  <hr class="my-2" />
-                  <div class="row g-3 align-items-end">
-                    <div class="col-sm-8 col-md-9">
-                      <label class="form-label">Telephony Provider</label>
-                      <select id="telephonyProvider" class="form-select">
-                        <option value="twilio">Twilio</option>
-                        <option value="clicksend">ClickSend</option>
-                      </select>
-                      <small class="text-muted">Choose the voice/SMS backend.</small>
-                    </div>
-                    <div class="col-sm-4 col-md-3 text-end">
-                      <button class="btn btn-primary w-100" id="btnSaveProvider">
-                        <i class="bi bi-save2 me-1"></i>Save Provider
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Audio Settings (right side) -->
-        <div class="col-12 col-xxl-6">
-          <div class="card shadow-sm h-100">
-            <div class="card-header">
-              <div class="section-title">Audio Settings</div>
-              <small class="text-muted">Select sounds and upload new files</small>
-            </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-12">
-                  <label class="form-label">Solenoid Activated</label>
-                  <div class="input-group">
-                    <select id="audioActivatedSel" class="form-select"></select>
-                    <button class="btn btn-outline-light" id="btnTestAudioActivated" title="Preview in browser">
-                      <i class="bi bi-play-fill"></i>
-                    </button>
-                  </div>
-                </div>
-
-                <div class="col-12">
-                  <label class="form-label">Solenoid Deactivated</label>
-                  <div class="input-group">
-                    <select id="audioDeactivatedSel" class="form-select"></select>
-                    <button class="btn btn-outline-light" id="btnTestAudioDeactivated" title="Preview in browser">
-                      <i class="bi bi-play-fill"></i>
-                    </button>
-                  </div>
-                </div>
-
-                <div class="col-12">
-                  <label class="form-label">
-                    System Volume
-                    <small id="audioVolumeVal" class="text-muted ms-1">--%</small>
-                  </label>
-                  <input type="range" class="form-range" id="audioVolume" min="0" max="100" step="1" list="volTicks">
-                  <datalist id="volTicks">
-                    <option value="0"></option>
-                    <option value="25"></option>
-                    <option value="50"></option>
-                    <option value="75"></option>
-                    <option value="100"></option>
-                  </datalist>
-                </div>
-
-                <div class="col-12">
-                  <label class="form-label mt-2">Upload New Audio</label>
-                  <div class="input-group">
-                    <input type="file" class="form-control" id="audioUpload" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.oga">
-                    <button class="btn btn-outline-light" id="btnAudioUpload"><i class="bi bi-cloud-upload"></i>&nbsp;Upload</button>
-                  </div>
-                  <small class="text-muted">Supported: mp3, wav</small>
-                </div>
-              </div>
-            </div>
-            <div class="card-footer text-end bg-transparent">
-              <button class="btn btn-primary" id="btnSaveAudio"><i class="bi bi-save2 me-1"></i>Save Audio Selections</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Hidden browser audio element for previews -->
-        <audio id="audioPlayer" preload="none" style="display:none"></audio>
-
-        <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
-
-        <!-- Recipients -->
-        <div class="col-12">
-          <div class="card shadow-sm">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <div>
-                <div class="section-title">Recipients</div>
-                <small class="text-muted">Manage who receives alerts.</small>
-              </div>
-              <div class="d-flex gap-2">
-                <button class="btn btn-primary btn-sm" id="btnAddRecipient"><i class="bi bi-person-plus me-1"></i>Add Recipient</button>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="table-responsive">
-                <table class="table table-hover align-middle table-nowrap" id="recipientsTable">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Phone</th>
-                      <th>Email</th>
-                      <th>Receive Text</th>
-                      <th class="text-end">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="recipientsTbody"></tbody>
-                </table>
-              </div>
-              <div id="emptyState" class="text-center text-muted py-3 d-none">
-                <i class="bi bi-inboxes fs-1 d-block mb-2"></i>
-                <div>No recipients yet.</div>
-                <small>Click “Add Recipient” to create one.</small>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
-
-        <!-- Row: Telephony Credentials (left) + SMTP (right) -->
-        <div class="col-12 col-xxl-6">
-          <!-- Twilio Settings -->
-          <div id="twilioCard" class="card shadow-sm h-100">
-            <div class="card-header">
-              <div class="section-title">Twilio Credentials</div>
-              <small class="text-muted">Used when provider is Twilio.</small>
-            </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label">Account SID</label>
-                  <input class="form-control" id="twilioUsername" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-                  <small class="text-muted">Your Twilio Account SID (AC…)</small>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">API Key SID</label>
-                  <input class="form-control" id="twilioToken" placeholder="SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-                  <small class="text-muted">Standard API Key SID (SK…)</small>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">API Key Secret</label>
-                  <input type="password" class="form-control" id="twilioApiSecret" placeholder="••••••••" autocomplete="new-password">
-                  <small class="text-muted">Keep this secret safe</small>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Source Number (From)</label>
-                  <input type="tel" class="form-control" id="twilioSourceNumber" placeholder="+18551234567" inputmode="tel" autocomplete="off">
-                  <small class="text-muted">E.164 format (+1...)</small>
-                </div>
-                <div class="col-12">
-                  <label class="form-label mt-2">Twilio Notification Text</label>
-                  <textarea class="form-control" id="twilioNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
-                  <small class="text-muted">Max 255 characters. Used for SMS body and voice TTS.</small>
-                </div>
-              </div>
-            </div>
-            <div class="card-footer text-end bg-transparent">
-              <button class="btn btn-primary" id="btnSaveTwilio">
-                <i class="bi bi-save2 me-1"></i>Save Twilio
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Solenoid Activated</label>
+            <div class="input-group">
+              <select id="audioActivatedSel" class="form-select"></select>
+              <button class="btn btn-outline-light" id="btnTestAudioActivated" title="Preview in browser">
+                <i class="bi bi-play-fill"></i>
               </button>
             </div>
           </div>
-
-          <!-- ClickSend Settings -->
-          <div id="clicksendCard" class="card shadow-sm h-100 d-none">
-            <div class="card-header">
-              <div class="section-title">ClickSend Credentials</div>
-              <small class="text-muted">Used when provider is ClickSend.</small>
-            </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label">Username</label>
-                  <input class="form-control" id="clicksendUsername" placeholder="your@email.com" autocomplete="off">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">API Key</label>
-                  <input type="password" class="form-control" id="clicksendApiKey" placeholder="••••••••" autocomplete="new-password">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">SMS From</label>
-                  <input class="form-control" id="clicksendFrom" placeholder="Optional alphanumeric or number">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Voice Caller ID</label>
-                  <input class="form-control" id="clicksendVoiceFrom" placeholder="Optional caller ID">
-                </div>
-                <div class="col-12">
-                  <label class="form-label mt-2">ClickSend Notification Text</label>
-                  <textarea class="form-control" id="clicksendNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
-                  <small class="text-muted">Max 255 characters. Used for SMS body and voice TTS.</small>
-                </div>
-              </div>
-            </div>
-            <div class="card-footer text-end bg-transparent">
-              <button class="btn btn-primary" id="btnSaveClickSend">
-                <i class="bi bi-save2 me-1"></i>Save ClickSend
+          <div class="col-12">
+            <label class="form-label">Solenoid Deactivated</label>
+            <div class="input-group">
+              <select id="audioDeactivatedSel" class="form-select"></select>
+              <button class="btn btn-outline-light" id="btnTestAudioDeactivated" title="Preview in browser">
+                <i class="bi bi-play-fill"></i>
               </button>
             </div>
           </div>
-        </div>
-
-        <!-- SMTP (right of credentials row) -->
-        <div class="col-12 col-xxl-6">
-          <div class="card shadow-sm h-100">
-            <div class="card-header">
-              <div class="section-title">SMTP Settings</div>
-              <small class="text-muted">Configure outgoing mail server.</small>
-            </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label required">SMTP Server</label>
-                  <input class="form-control" id="smtpServer" placeholder="smtp.example.com">
-                  <small class="text-muted">If Gmail, ensure 2FA is enabled.</small>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label required">Port</label>
-                  <input type="number" class="form-control" id="smtpPort" placeholder="587">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Username</label>
-                  <input class="form-control" id="smtpUsername" placeholder="mailer@example.com">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Password</label>
-                  <input type="password" class="form-control" id="smtpPassword" placeholder="••••••••">
-                  <small class="text-muted">If Gmail, use App Password</small>
-                </div>
-                <div class="col-12">
-                  <label class="form-label mt-2">Email Notification Text</label>
-                  <textarea class="form-control" id="smtpNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
-                  <small class="text-muted">Max 255 characters. Used as the default email body or prefix.</small>
-                </div>
-              </div>
-            </div>
-            <div class="card-footer text-end bg-transparent">
-              <button class="btn btn-primary" id="btnSaveSmtp"><i class="bi bi-save2 me-1"></i>Save SMTP</button>
-            </div>
+          <div class="col-12">
+            <label class="form-label">
+              System Volume
+              <small id="audioVolumeVal" class="text-muted ms-1">--%</small>
+            </label>
+            <input type="range" class="form-range" id="audioVolume" min="0" max="100" step="1" list="volTicks">
+            <datalist id="volTicks">
+              <option value="0"></option>
+              <option value="25"></option>
+              <option value="50"></option>
+              <option value="75"></option>
+              <option value="100"></option>
+            </datalist>
           </div>
-        </div>
-
-        <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
-
-        <!-- MQTT moved to bottom, full width -->
-        <div class="col-12">
-          <div class="card shadow-sm h-100">
-            <div class="card-header">
-              <div class="section-title">MQTT Settings</div>
-              <small class="text-muted">Broker & topics.</small>
+          <div class="col-12">
+            <label class="form-label mt-2">Upload New Audio</label>
+            <div class="input-group">
+              <input type="file" class="form-control" id="audioUpload" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.oga">
+              <button class="btn btn-outline-light" id="btnAudioUpload"><i class="bi bi-cloud-upload"></i>&nbsp;Upload</button>
             </div>
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-md-3">
-                  <label class="form-label required">Host</label>
-                  <input class="form-control" id="mqttHost" placeholder="mqtt.local">
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label">User</label>
-                  <input class="form-control" id="mqttUser" placeholder="mqtt_user">
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label">Password</label>
-                  <input type="password" class="form-control" id="mqttPassword" placeholder="••••••••">
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label required">Topic Base</label>
-                  <input class="form-control" id="mqttTopicBase" placeholder="alerts/furnace">
-                </div>
-              </div>
-            </div>
-            <div class="card-footer text-end bg-transparent">
-              <button class="btn btn-primary" id="btnSaveMqtt"><i class="bi bi-save2 me-1"></i>Save MQTT</button>
-            </div>
+            <small class="text-muted">Supported: mp3, wav</small>
           </div>
         </div>
       </div>
-    </section>
+      <div class="card-footer text-end bg-transparent">
+        <button class="btn btn-primary" id="btnSaveAudio"><i class="bi bi-save2 me-1"></i>Save Audio Selections</button>
+      </div>
+    </div>
   </div>
-</main>
+  <audio id="audioPlayer" preload="none" style="display:none"></audio>
+  <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div>
+          <div class="section-title">Recipients</div>
+          <small class="text-muted">Manage who receives alerts.</small>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary btn-sm" id="btnAddRecipient"><i class="bi bi-person-plus me-1"></i>Add Recipient</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle table-nowrap" id="recipientsTable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Email</th>
+                <th>Receive Text</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="recipientsTbody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="text-center text-muted py-3 d-none">
+          <i class="bi bi-inboxes fs-1 d-block mb-2"></i>
+          <div>No recipients yet.</div>
+          <small>Click “Add Recipient” to create one.</small>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+  <div class="col-12 col-xxl-6">
+    <div id="twilioCard" class="card shadow-sm h-100">
+      <div class="card-header">
+        <div class="section-title">Twilio Credentials</div>
+        <small class="text-muted">Used when provider is Twilio.</small>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Account SID</label>
+            <input class="form-control" id="twilioUsername" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+            <small class="text-muted">Your Twilio Account SID (AC…)</small>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">API Key SID</label>
+            <input class="form-control" id="twilioToken" placeholder="SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+            <small class="text-muted">Standard API Key SID (SK…)</small>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">API Key Secret</label>
+            <input type="password" class="form-control" id="twilioApiSecret" placeholder="••••••••" autocomplete="new-password">
+            <small class="text-muted">Keep this secret safe</small>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Source Number (From)</label>
+            <input type="tel" class="form-control" id="twilioSourceNumber" placeholder="+18551234567" inputmode="tel" autocomplete="off">
+            <small class="text-muted">E.164 format (+1...)</small>
+          </div>
+          <div class="col-12">
+            <label class="form-label mt-2">Twilio Notification Text</label>
+            <textarea class="form-control" id="twilioNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
+            <small class="text-muted">Max 255 characters. Used for SMS body and voice TTS.</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer text-end bg-transparent">
+        <button class="btn btn-primary" id="btnSaveTwilio">
+          <i class="bi bi-save2 me-1"></i>Save Twilio
+        </button>
+      </div>
+    </div>
+    <div id="clicksendCard" class="card shadow-sm h-100 d-none">
+      <div class="card-header">
+        <div class="section-title">ClickSend Credentials</div>
+        <small class="text-muted">Used when provider is ClickSend.</small>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Username</label>
+            <input class="form-control" id="clicksendUsername" placeholder="your@email.com" autocomplete="off">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">API Key</label>
+            <input type="password" class="form-control" id="clicksendApiKey" placeholder="••••••••" autocomplete="new-password">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">SMS From</label>
+            <input class="form-control" id="clicksendFrom" placeholder="Optional alphanumeric or number">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Voice Caller ID</label>
+            <input class="form-control" id="clicksendVoiceFrom" placeholder="Optional caller ID">
+          </div>
+          <div class="col-12">
+            <label class="form-label mt-2">ClickSend Notification Text</label>
+            <textarea class="form-control" id="clicksendNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
+            <small class="text-muted">Max 255 characters. Used for SMS body and voice TTS.</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer text-end bg-transparent">
+        <button class="btn btn-primary" id="btnSaveClickSend">
+          <i class="bi bi-save2 me-1"></i>Save ClickSend
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-xxl-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header">
+        <div class="section-title">SMTP Settings</div>
+        <small class="text-muted">Configure outgoing mail server.</small>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label required">SMTP Server</label>
+            <input class="form-control" id="smtpServer" placeholder="smtp.example.com">
+            <small class="text-muted">If Gmail, ensure 2FA is enabled.</small>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label required">Port</label>
+            <input type="number" class="form-control" id="smtpPort" placeholder="587">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Username</label>
+            <input class="form-control" id="smtpUsername" placeholder="mailer@example.com">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Password</label>
+            <input type="password" class="form-control" id="smtpPassword" placeholder="••••••••">
+            <small class="text-muted">If Gmail, use App Password</small>
+          </div>
+          <div class="col-12">
+            <label class="form-label mt-2">Email Notification Text</label>
+            <textarea class="form-control" id="smtpNotifyText" rows="3" maxlength="255" placeholder="e.g., ALERT: Gas solenoid de-energized. Please check the furnace."></textarea>
+            <small class="text-muted">Max 255 characters. Used as the default email body or prefix.</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer text-end bg-transparent">
+        <button class="btn btn-primary" id="btnSaveSmtp"><i class="bi bi-save2 me-1"></i>Save SMTP</button>
+      </div>
+    </div>
+  </div>
+  <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+  <div class="col-12">
+    <div class="card shadow-sm h-100">
+      <div class="card-header">
+        <div class="section-title">MQTT Settings</div>
+        <small class="text-muted">Broker & topics.</small>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-3">
+            <label class="form-label required">Host</label>
+            <input class="form-control" id="mqttHost" placeholder="mqtt.local">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">User</label>
+            <input class="form-control" id="mqttUser" placeholder="mqtt_user">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Password</label>
+            <input type="password" class="form-control" id="mqttPassword" placeholder="••••••••">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label required">Topic Base</label>
+            <input class="form-control" id="mqttTopicBase" placeholder="alerts/furnace">
+          </div>
+        </div>
+      </div>
+      <div class="card-footer text-end bg-transparent">
+        <button class="btn btn-primary" id="btnSaveMqtt"><i class="bi bi-save2 me-1"></i>Save MQTT</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/config.js') }}"></script>
+{% endblock %}
 
 <!-- Recipient Modal -->
 <div class="modal fade" id="recipientModal" tabindex="-1" aria-hidden="true">
@@ -441,24 +362,3 @@
     </div>
   </div>
 </div>
-
-<!-- Alert History Drawer -->
-<div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="historyDrawer" aria-labelledby="historyDrawerLabel">
-  <div class="offcanvas-header">
-    <h5 class="offcanvas-title" id="historyDrawerLabel">Alert History</h5>
-    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-  </div>
-  <div class="offcanvas-body d-flex flex-column">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-      <small class="text-muted" id="historyCount">Loading…</small>
-      <div class="btn-group btn-group-sm">
-        <button class="btn btn-outline-light" id="btnRefreshHistory" title="Refresh">
-          <i class="bi bi-arrow-repeat"></i>
-        </button>
-      </div>
-    </div>
-    <div id="historyList" class="list-group list-group-flush flex-grow-1 overflow-auto"></div>
-  </div>
-</div>
-</body>
-</html>

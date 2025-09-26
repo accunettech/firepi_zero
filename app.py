@@ -1,6 +1,7 @@
 import os, atexit, signal, logging, threading
 from flask import Flask, jsonify
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 from db import db, init_db
 from blueprints.config_ui import bp as config_ui_bp
 from services.solenoid_monitor import SolenoidMonitor
@@ -42,6 +43,8 @@ def configure_logging():
     console.setLevel(level)
     root.addHandler(console)
 
+    return log_dir
+
 def _graceful_shutdown(signum, frame):
     logging.info("Received signal %s -> graceful shutdown", signum)
     try:
@@ -50,16 +53,25 @@ def _graceful_shutdown(signum, frame):
     finally:
         raise SystemExit(0)
 
-def create_app() -> Flask:
+def create_app(log_dir: str) -> Flask:
     app = Flask(__name__)
     app.logger.setLevel(logging.INFO)
 
     # Core config
+    vf = Path(app.root_path) / "VERSION"
+    if vf.exists():
+        app.config["APP_VERSION"] = vf.read_text(encoding="utf-8").strip()
+    else:
+        app.config["APP_VERSION"] = "dev"
+    
+    logging.info(f"Starting PiFire v{app.config['APP_VERSION']}")
+
     os.makedirs(app.instance_path, exist_ok=True)
     db_path = os.path.join(app.instance_path, "alerting.db")
     rois_path = os.path.join(app.instance_path, "panel_rois.yaml")
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["LOG_DIR"] = log_dir
 
     # DB
     init_db(app)
@@ -138,8 +150,8 @@ def create_app() -> Flask:
 
 
 if __name__ == "__main__":
-    configure_logging()
-    app = create_app()
+    log_dir = configure_logging()
+    app = create_app(log_dir)
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT,  _graceful_shutdown)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False, threaded=False, use_reloader=False)

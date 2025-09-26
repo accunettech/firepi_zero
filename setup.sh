@@ -90,6 +90,10 @@ if ! id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx audio; then
   usermod -aG audio "$RUN_USER"
 fi
 
+# create /etc/sudoers.d/firepi-reboot
+echo "${RUN_USER} ALL=NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/reboot" | sudo tee /etc/sudoers.d/firepi-reboot >/dev/null
+sudo chmod 440 /etc/sudoers.d/firepi-reboot
+
 # ---------- /boot/*/config.txt ----------
 CONFIG_TXT=""
 for f in /boot/firmware/config.txt /boot/config.txt; do

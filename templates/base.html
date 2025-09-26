@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}FirePi{% endblock %}</title>
+  <link href="{{ url_for('static', filename='css/bootstrap.5.3.3.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/font/bootstrap-icons.1.11.3.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+    <div class="container d-flex align-items-center justify-content-between">
+      <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.panel_page') }}">
+        <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}"
+             alt="Ervin Glassworks" width="56" height="56" class="rounded-1">
+        <span>&nbsp;&nbsp;FirePi</span>
+      </a>
+      <div class="d-flex align-items-center gap-2">
+        <span id="healthBadge" class="badge rounded-pill px-3 py-2">—</span>
+        <button class="btn btn-outline-light btn-sm" id="btnOpenHistory"
+                data-bs-toggle="offcanvas" data-bs-target="#historyDrawer">
+          <i class="bi bi-activity me-1"></i>History
+        </button>
+      </div>
+    </div>
+  </nav>
+  <main class="container pb-5">
+    <div class="row">
+      <aside class="col-12 col-md-3 col-xl-2 mb-4">
+        <div class="list-group side-nav sticky-top">
+          <a href="{{ url_for('config_ui.panel_page') }}"
+             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel') and not request.path.startswith('/panel/calibrate') else '' }}">
+            <i class="bi bi-speedometer2 me-2"></i>Panel
+          </a>
+          <a href="{{ url_for('config_ui.panel_calibrate') }}"
+             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}">
+            <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
+          </a>
+          <a href="{{ url_for('config_ui.config_page') }}"
+             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
+            <i class="bi bi-gear me-2"></i>Configuration
+          </a>
+          <a href="{{ url_for('config_ui.admin_page') }}"
+             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
+            <i class="bi bi-shield-lock me-2"></i>Administration
+          </a>
+        </div>
+      </aside>
+      <section class="col-12 col-md-9 col-xl-10">
+        {% block content %}{% endblock %}
+      </section>
+    </div>
+  </main>
+  <div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="historyDrawer" aria-labelledby="historyDrawerLabel">
+    <div class="offcanvas-header">
+      <h5 class="offcanvas-title" id="historyDrawerLabel">Alert History</h5>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <small class="text-muted" id="historyCount">Loading…</small>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-light" id="btnRefreshHistory" title="Refresh">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+        </div>
+      </div>
+      <div id="historyList" class="list-group list-group-flush flex-grow-1 overflow-auto"></div>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/base.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

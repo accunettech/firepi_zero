@@ -1,86 +1,6 @@
-// ---------- tiny helpers ----------
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-
-async function apiGet(url) {
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function apiPut(url, body) {
-  const r = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function apiPost(url, body) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-function toast(message) {
-  const wrap = document.createElement("div");
-  wrap.className = "position-fixed top-0 end-0 p-3";
-  wrap.style.zIndex = 1080;
-  wrap.innerHTML = `
-    <div class="toast align-items-center text-bg-dark border-0 show">
-      <div class="d-flex">
-        <div class="toast-body">${message}</div>
-        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  setTimeout(() => wrap.remove(), 2600);
-}
-
-// ---------- global state ----------
 let recipientModal;            // bootstrap.Modal instance
 let editingRecipientId = null; // null => adding, number => editing
 
-// ---------- health badge ----------
-async function refreshHealth() {
-  const badge = $("#healthBadge");
-  if (!badge) return;
-
-  try {
-    const j = await apiGet("/api/health");
-    const state = (j.state || "—").toString().toUpperCase();
-
-    let timeStr = "";
-    if (typeof j.last_change_ts === "number" && j.last_change_ts > 0) {
-      const nowSec = Date.now() / 1000;
-      const delta = Math.max(0, nowSec - j.last_change_ts);
-      timeStr = delta < 60
-        ? `${Math.floor(delta)}s`
-        : `${Math.floor(delta / 60)}m`;
-    }
-
-    badge.textContent = timeStr ? `${state} • ${timeStr}` : state;
-
-    // Color by state (OFF = alarm-ish => danger; ON = good => success; else neutral)
-    let cls = "badge rounded-pill px-3 py-2 ";
-    if (state === "ON") {
-      cls += "bg-success-subtle text-success-emphasis";
-    } else if (state === "OFF") {
-      cls += "bg-danger-subtle text-danger-emphasis";
-    } else {
-      cls += "bg-secondary-subtle text-secondary-emphasis";
-    }
-    badge.className = cls;
-  } catch {
-    badge.textContent = "Unknown";
-    badge.className = "badge rounded-pill px-3 py-2 bg-warning-subtle text-warning-emphasis";
-  }
-}
-
-// ---------- provider UI toggle ----------
 function showProviderCredentials(which) {
   const value = (which || "").toString().toLowerCase();
   const tw = $("#twilioCard");
@@ -89,13 +9,11 @@ function showProviderCredentials(which) {
     tw && tw.classList.add("d-none");
     cs && cs.classList.remove("d-none");
   } else {
-    // default to Twilio
     cs && cs.classList.add("d-none");
     tw && tw.classList.remove("d-none");
   }
 }
 
-// ---------- settings load/save ----------
 async function loadSettingsIntoForm() {
   const s = await apiGet("/api/settings");
 
@@ -135,10 +53,10 @@ async function loadSettingsIntoForm() {
   $("#clicksendNotifyText").value = s.clicksend_notify_text ?? cs.notify_text ?? "";
 
   // MQTT
-  $("#mqttHost").value        = s.mqtt_host || "";
-  $("#mqttUser").value        = s.mqtt_user || "";
-  $("#mqttPassword").value    = s.mqtt_password || "";
-  $("#mqttTopicBase").value   = s.mqtt_topic_base || "";
+  $("#mqttHost").value      = s.mqtt_host || "";
+  $("#mqttUser").value      = s.mqtt_user || "";
+  $("#mqttPassword").value  = s.mqtt_password || "";
+  $("#mqttTopicBase").value = s.mqtt_topic_base || "";
 }
 
 async function saveGlobalToggles() {
@@ -167,17 +85,9 @@ async function saveSmtp() {
 async function saveProvider() {
   const sel = $("#telephonyProvider");
   const provider = (sel?.value || "twilio").toString().toLowerCase();
-
-  // Optimistically toggle immediately
-  showProviderCredentials(provider);
-
-  // Persist to backend and then reload settings to reflect server's persisted value
+  showProviderCredentials(provider); // immediate
   await apiPut("/api/settings", { telephony_provider: provider });
-  try {
-    await loadSettingsIntoForm(); // re-sync UI after save
-  } catch (_) {
-    // If reload fails, at least we already toggled locally
-  }
+  try { await loadSettingsIntoForm(); } catch {}
   toast("Provider saved");
 }
 
@@ -225,18 +135,15 @@ async function testNotifications() {
   }
 }
 
-// ---------- recipients ----------
 async function fetchRecipients() {
   return apiGet("/api/recipients");
 }
-
 function renderRecipientsTable(rows) {
   const tbody = $("#recipientsTbody");
   const empty = $("#emptyState");
   if (!tbody) return;
 
   tbody.innerHTML = "";
-
   if (!rows || rows.length === 0) {
     if (empty) empty.classList.remove("d-none");
     return;
@@ -245,39 +152,22 @@ function renderRecipientsTable(rows) {
 
   for (const r of rows) {
     const tr = document.createElement("tr");
-
-    const tdName = document.createElement("td");
-    tdName.textContent = r.name || "";
-    tr.appendChild(tdName);
-
-    const tdPhone = document.createElement("td");
-    tdPhone.textContent = r.phone || "";
-    tr.appendChild(tdPhone);
-
-    const tdEmail = document.createElement("td");
-    tdEmail.textContent = r.email || "";
-    tr.appendChild(tdEmail);
-
-    const tdSms = document.createElement("td");
-    tdSms.textContent = r.receive_sms ? "Yes" : "No";
-    tr.appendChild(tdSms);
-
-    const tdActions = document.createElement("td");
-    tdActions.className = "text-end";
-    tdActions.innerHTML = `
-      <button class="btn btn-outline-light btn-sm me-2" data-action="edit" data-id="${r.id}">
-        <i class="bi bi-pencil"></i>
-      </button>
-      <button class="btn btn-outline-light btn-sm" data-action="delete" data-id="${r.id}">
-        <i class="bi bi-trash"></i>
-      </button>
-    `;
-    tr.appendChild(tdActions);
-
+    tr.innerHTML = `
+      <td>${r.name || ""}</td>
+      <td>${r.phone || ""}</td>
+      <td>${r.email || ""}</td>
+      <td>${r.receive_sms ? "Yes" : "No"}</td>
+      <td class="text-end">
+        <button class="btn btn-outline-light btn-sm me-2" data-action="edit" data-id="${r.id}">
+          <i class="bi bi-pencil"></i>
+        </button>
+        <button class="btn btn-outline-light btn-sm" data-action="delete" data-id="${r.id}">
+          <i class="bi bi-trash"></i>
+        </button>
+      </td>`;
     tbody.appendChild(tr);
   }
 
-  // Row button handlers (delegate)
   tbody.querySelectorAll("button[data-action]").forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
@@ -299,28 +189,18 @@ function renderRecipientsTable(rows) {
     });
   });
 }
-
 async function refreshRecipientsUI() {
-  const rows = await fetchRecipients();
-  renderRecipientsTable(rows);
+  renderRecipientsTable(await fetchRecipients());
 }
-
 function openRecipientModal(mode = "add", rec = null) {
   editingRecipientId = mode === "edit" && rec ? rec.id : null;
-
-  // Title
-  const titleEl = $("#recipientModalTitle");
-  if (titleEl) titleEl.textContent = editingRecipientId ? "Edit Recipient" : "Add Recipient";
-
-  // Fill fields
+  $("#recipientModalTitle").textContent = editingRecipientId ? "Edit Recipient" : "Add Recipient";
   $("#recName").value  = rec?.name  ?? "";
   $("#recPhone").value = rec?.phone ?? "";
   $("#recEmail").value = rec?.email ?? "";
   $("#recSms").checked = !!rec?.receive_sms;
-
   recipientModal.show();
 }
-
 async function saveRecipient() {
   const payload = {
     name: $("#recName").value.trim(),
@@ -328,10 +208,7 @@ async function saveRecipient() {
     email: $("#recEmail").value.trim(),
     receive_sms: $("#recSms").checked,
   };
-  if (!payload.name) {
-    toast("Name is required");
-    return;
-  }
+  if (!payload.name) return toast("Name is required");
 
   try {
     if (editingRecipientId) {
@@ -352,78 +229,9 @@ async function saveRecipient() {
   }
 }
 
-// ---------- history drawer ----------
-async function refreshHistory() {
-  try {
-    const rows = await apiGet("/api/history?limit=100");
-    const list = $("#historyList");
-    const count = $("#historyCount");
-    if (count) count.textContent = `${rows.length} recent event(s)`;
-
-    if (!list) return;
-    list.innerHTML = "";
-
-    for (const r of rows) {
-      const ts = new Date(r.ts);
-      const when = ts ? ts.toLocaleString() : "—";
-      const statusBadge = r.status === "success"
-        ? `<span class="badge bg-success-subtle text-success-emphasis">success</span>`
-        : r.status === "error"
-          ? `<span class="badge bg-danger-subtle text-danger-emphasis">error</span>`
-          : `<span class="badge bg-secondary-subtle text-secondary-emphasis">${r.status || "—"}</span>`;
-
-      const item = document.createElement("div");
-      item.className = "list-group-item list-group-item-action bg-transparent";
-      item.innerHTML = `
-        <div class="d-flex w-100 justify-content-between">
-          <h6 class="mb-1">${(r.alert_type || "event").toUpperCase()} • ${r.channel || "—"}</h6>
-          <small class="history-meta">${when}</small>
-        </div>
-        <div class="mb-1">
-          <div class="small text-muted">Sensor</div>
-          <div>${r.sensor || "—"} <span class="ms-2 small text-muted">value:</span> <strong>${r.sensor_val || "—"}</strong></div>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          ${statusBadge}
-          ${r.error_text ? `<small class="text-danger-emphasis">${r.error_text}</small>` : ""}
-        </div>
-      `;
-      list.appendChild(item);
-    }
-  } catch {
-    const list = $("#historyList");
-    if (list) {
-      list.innerHTML = `<div class="text-muted">Unable to load history.</div>`;
-    }
-  }
-}
-
-function wireHistoryDrawer() {
-  const drawer = document.getElementById("historyDrawer");
-  if (!drawer || drawer.dataset.bound) return;
-  drawer.dataset.bound = "1";
-
-  drawer.addEventListener("shown.bs.offcanvas", () => {
-    refreshHistory();
-  });
-
-  const btn = $("#btnRefreshHistory");
-  if (btn && !btn.dataset.bound) {
-    btn.dataset.bound = "1";
-    btn.addEventListener("click", refreshHistory);
-  }
-}
-
-// === AUDIO ===
-async function loadAudioFiles() {
-  return apiGet("/api/audio/files");
-}
-async function loadAudioSettings() {
-  return apiGet("/api/audio/settings");
-}
-async function saveAudioSettings(body) {
-  return apiPut("/api/audio/settings", body);
-}
+async function loadAudioFiles()  { return apiGet("/api/audio/files"); }
+async function loadAudioSettings(){ return apiGet("/api/audio/settings"); }
+async function saveAudioSettings(body){ return apiPut("/api/audio/settings", body); }
 async function uploadAudioFile(file) {
   const fd = new FormData();
   fd.append("file", file);
@@ -431,14 +239,12 @@ async function uploadAudioFile(file) {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
-
 function populateAudioSelect(sel, files, current) {
   sel.innerHTML = "";
   const optNone = document.createElement("option");
   optNone.value = "";
   optNone.textContent = "— None —";
   sel.appendChild(optNone);
-
   for (const f of files) {
     const opt = document.createElement("option");
     opt.value = f.filename;
@@ -447,27 +253,20 @@ function populateAudioSelect(sel, files, current) {
     sel.appendChild(opt);
   }
 }
-
 async function refreshAudioUI() {
   const [files, settings] = await Promise.all([loadAudioFiles(), loadAudioSettings()]);
   populateAudioSelect($("#audioActivatedSel"), files, settings.solenoid_activated_audio || "");
   populateAudioSelect($("#audioDeactivatedSel"), files, settings.solenoid_deactivated_audio || "");
 
-  console.log(settings)
-
-  // stash urls by filename for fast lookup on preview
   const map = Object.fromEntries(files.map(f => [f.filename, f.url]));
   $("#audioActivatedSel").dataset.urlMap = JSON.stringify(map);
   $("#audioDeactivatedSel").dataset.urlMap = JSON.stringify(map);
-  
+
   if (typeof settings.volume === "number") {
-    const volEl = $("#audioVolume");
-    const volLbl = $("#audioVolumeVal");
-    if (volEl) volEl.value = settings.volume;
-    if (volLbl) volLbl.textContent = `${settings.volume}%`;
+    $("#audioVolume").value = settings.volume;
+    $("#audioVolumeVal").textContent = `${settings.volume}%`;
   }
 }
-
 async function onSaveAudioSelections() {
   const body = {
     solenoid_activated_audio: $("#audioActivatedSel").value || null,
@@ -477,16 +276,11 @@ async function onSaveAudioSelections() {
   await saveAudioSettings(body);
   toast("Audio selections saved");
 }
-
 async function onUploadAudio() {
   const inp = $("#audioUpload");
-  if (!inp.files || inp.files.length === 0) {
-    toast("Choose a file to upload");
-    return;
-  }
+  if (!inp.files || inp.files.length === 0) return toast("Choose a file to upload");
   try {
-    const file = inp.files[0];
-    await uploadAudioFile(file);
+    await uploadAudioFile(inp.files[0]);
     inp.value = "";
     await refreshAudioUI();
     toast("Audio uploaded");
@@ -494,31 +288,21 @@ async function onUploadAudio() {
     toast("Upload failed: " + (e.message || e));
   }
 }
-
 function previewSelected(selId) {
   const sel = $(selId);
   const fn = sel.value;
-  if (!fn) {
-    toast("No file selected");
-    return;
-  }
+  if (!fn) return toast("No file selected");
   const map = JSON.parse(sel.dataset.urlMap || "{}");
   const url = map[fn];
-  if (!url) {
-    toast("File not found on server");
-    return;
-  }
+  if (!url) return toast("File not found on server");
   const player = $("#audioPlayer");
   player.pause();
   player.src = url;
   player.currentTime = 0;
-  // Let the browser decide device/output—this plays locally for the user
   player.play().catch(() => toast("Browser blocked autoplay—click the play button again"));
 }
 
-// ---------- wire UI once DOM ready ----------
 document.addEventListener("DOMContentLoaded", async () => {
-  // Bootstrap Modal instance (must be created from element)
   const modalEl = document.getElementById("recipientModal");
   if (modalEl) {
     recipientModal = bootstrap.Modal.getOrCreateInstance(modalEl, {
@@ -527,120 +311,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  const btnSaveToggles = $("#btnSaveToggles");
-  if (btnSaveToggles && !btnSaveToggles.dataset.bound) {
-    btnSaveToggles.dataset.bound = "1";
-    btnSaveToggles.addEventListener("click", () => saveGlobalToggles().catch(e => toast(e.message || e)));
-  }
+  $("#btnSaveToggles")?.addEventListener("click", () => saveGlobalToggles().catch(e => toast(e.message || e)));
+  $("#btnTestNotifications")?.addEventListener("click", testNotifications);
+  $("#btnSaveSmtp")?.addEventListener("click", () => saveSmtp().catch(e => toast(e.message || e)));
+  $("#btnSaveProvider")?.addEventListener("click", () => saveProvider().catch(e => toast(e.message || e)));
+  $("#telephonyProvider")?.addEventListener("change", (e) => showProviderCredentials((e.target.value || "twilio")));
+  $("#btnSaveTwilio")?.addEventListener("click", () => saveTwilio().catch(e => toast(e.message || e)));
+  $("#btnSaveClickSend")?.addEventListener("click", () => saveClickSend().catch(e => toast(e.message || e)));
+  $("#btnSaveMqtt")?.addEventListener("click", () => saveMqtt().catch(e => toast(e.message || e)));
 
-  const btnTest = $("#btnTestNotifications");
-  if (btnTest && !btnTest.dataset.bound) {
-    btnTest.dataset.bound = "1";
-    btnTest.addEventListener("click", testNotifications);
-  }
+  $("#btnAddRecipient")?.addEventListener("click", () => openRecipientModal("add"));
+  $("#recipientSaveBtn")?.addEventListener("click", saveRecipient);
 
-  const btnSaveSmtp = $("#btnSaveSmtp");
-  if (btnSaveSmtp && !btnSaveSmtp.dataset.bound) {
-    btnSaveSmtp.dataset.bound = "1";
-    btnSaveSmtp.addEventListener("click", () => saveSmtp().catch(e => toast(e.message || e)));
-  }
-
-  const btnSaveProvider = $("#btnSaveProvider");
-  if (btnSaveProvider && !btnSaveProvider.dataset.bound) {
-    btnSaveProvider.dataset.bound = "1";
-    btnSaveProvider.addEventListener("click", () => saveProvider().catch(e => toast(e.message || e)));
-  }
-
-  const providerSelect = $("#telephonyProvider");
-  if (providerSelect && !providerSelect.dataset.bound) {
-    providerSelect.dataset.bound = "1";
-    providerSelect.addEventListener("change", (e) => {
-      const v = (e.target.value || "twilio").toString().toLowerCase();
-      showProviderCredentials(v); // show immediately on change
-    });
-  }
-
-  const btnSaveTwilio = $("#btnSaveTwilio");
-  if (btnSaveTwilio && !btnSaveTwilio.dataset.bound) {
-    btnSaveTwilio.dataset.bound = "1";
-    btnSaveTwilio.addEventListener("click", () => saveTwilio().catch(e => toast(e.message || e)));
-  }
-
-  const btnSaveClickSend = $("#btnSaveClickSend");
-  if (btnSaveClickSend && !btnSaveClickSend.dataset.bound) {
-    btnSaveClickSend.dataset.bound = "1";
-    btnSaveClickSend.addEventListener("click", () => saveClickSend().catch(e => toast(e.message || e)));
-  }
-
-  const btnSaveMqtt = $("#btnSaveMqtt");
-  if (btnSaveMqtt && !btnSaveMqtt.dataset.bound) {
-    btnSaveMqtt.dataset.bound = "1";
-    btnSaveMqtt.addEventListener("click", () => saveMqtt().catch(e => toast(e.message || e)));
-  }
-
-  const btnAddRecipient = $("#btnAddRecipient");
-  if (btnAddRecipient && !btnAddRecipient.dataset.bound) {
-    btnAddRecipient.dataset.bound = "1";
-    btnAddRecipient.addEventListener("click", () => openRecipientModal("add"));
-  }
-
-  const recipientSaveBtn = $("#recipientSaveBtn");
-  if (recipientSaveBtn && !recipientSaveBtn.dataset.bound) {
-    recipientSaveBtn.dataset.bound = "1";
-    recipientSaveBtn.addEventListener("click", saveRecipient);
-  }
-
-  // AUDIO: buttons
-  const btnSaveAudio = $("#btnSaveAudio");
-  if (btnSaveAudio && !btnSaveAudio.dataset.bound) {
-    btnSaveAudio.dataset.bound = "1";
-    btnSaveAudio.addEventListener("click", () => onSaveAudioSelections().catch(e => toast(e.message || e)));
-  }
-  const btnUpload = $("#btnAudioUpload");
-  if (btnUpload && !btnUpload.dataset.bound) {
-    btnUpload.dataset.bound = "1";
-    btnUpload.addEventListener("click", () => onUploadAudio());
-  }
-  const btnTestA = $("#btnTestAudioActivated");
-  if (btnTestA && !btnTestA.dataset.bound) {
-    btnTestA.dataset.bound = "1";
-    btnTestA.addEventListener("click", () => previewSelected("#audioActivatedSel"));
-  }
-  const btnTestD = $("#btnTestAudioDeactivated");
-  if (btnTestD && !btnTestD.dataset.bound) {
-    btnTestD.dataset.bound = "1";
-    btnTestD.addEventListener("click", () => previewSelected("#audioDeactivatedSel"));
-  }
+  $("#btnSaveAudio")?.addEventListener("click", () => onSaveAudioSelections().catch(e => toast(e.message || e)));
+  $("#btnAudioUpload")?.addEventListener("click", () => onUploadAudio());
+  $("#btnTestAudioActivated")?.addEventListener("click", () => previewSelected("#audioActivatedSel"));
+  $("#btnTestAudioDeactivated")?.addEventListener("click", () => previewSelected("#audioDeactivatedSel"));
 
   const vol = $("#audioVolume");
-  if (vol && !vol.dataset.bound) {
-    vol.dataset.bound = "1";
-    vol.addEventListener("input", () => {
-      $("#audioVolumeVal").textContent = `${vol.value}%`;
-    });
-  }
-
-  wireHistoryDrawer();
+  vol?.addEventListener("input", () => { $("#audioVolumeVal").textContent = `${vol.value}%`; });
 
   // Initial loads
-  try {
-    await loadSettingsIntoForm();
-  } catch (e) {
-    toast("Failed to load settings: " + (e.message || e));
-  }
-
-  try {
-    await refreshRecipientsUI();
-  } catch (e) {
-    toast("Failed to load recipients: " + (e.message || e));
-  }
-
-  try {
-    await refreshAudioUI();
-  } catch (e) {
-    toast("Failed to load audio settings: " + (e.message || e));
-  }
-
-  refreshHealth();
-  setInterval(refreshHealth, 5000);
+  try { await loadSettingsIntoForm(); } catch (e) { toast("Failed to load settings: " + (e.message || e)); }
+  try { await refreshRecipientsUI(); } catch (e) { toast("Failed to load recipients: " + (e.message || e)); }
+  try { await refreshAudioUI(); } catch (e) { toast("Failed to load audio settings: " + (e.message || e)); }
 });

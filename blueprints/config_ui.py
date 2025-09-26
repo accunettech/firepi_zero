@@ -1,7 +1,17 @@
-from flask import Blueprint, current_app, render_template, jsonify, request, send_file
+# blueprints/config_ui.py
+from flask import Blueprint, current_app, render_template, jsonify, request, send_file, url_for, send_from_directory
 import threading
+from pathlib import Path  # <-- needed for support_download
 from db import db, Recipient, AlertHistory, alert_history_as_dict, get_or_create_settings
-from services.audio import list_audio_files, save_upload, ensure_exists, serve_file, get_system_volume, set_system_volume
+from services.audio import (
+    list_audio_files,
+    save_upload,
+    ensure_exists,
+    serve_file,
+    get_system_volume,
+    set_system_volume,
+    delete_audio,
+)
 from services import admin_ops
 
 bp = Blueprint("config_ui", __name__)
@@ -9,7 +19,6 @@ bp = Blueprint("config_ui", __name__)
 # ---------- UI ----------
 @bp.route("/")
 def index():
-    # Default / to the live panel
     return render_template("panel.html")
 
 @bp.route("/panel")
@@ -18,7 +27,6 @@ def panel_page():
 
 @bp.route("/config")
 def config_page():
-    # This shows the former config.html (Configuration)
     return render_template("config.html")
 
 # ---------- Recipients API ----------
@@ -104,8 +112,8 @@ def get_settings():
 
         "clicksend_username": getattr(s, "clicksend_username", None),
         "clicksend_api_key": getattr(s, "clicksend_api_key", None),
-        "clicksend_from": getattr(s, "clicksend_from", None),            # SMS sender (alpha/numeric; optional)
-        "clicksend_voice_from": getattr(s, "clicksend_voice_from", None),# Verified caller ID for voice (optional)
+        "clicksend_from": getattr(s, "clicksend_from", None),
+        "clicksend_voice_from": getattr(s, "clicksend_voice_from", None),
         "clicksend_notify_text": getattr(s, "clicksend_notify_text", None),
 
         "mqtt_host": s.mqtt_host,
@@ -140,24 +148,13 @@ def update_settings():
         elif fld in data:
             setattr(s, fld, None)
 
-    # assign booleans + strings
+    # assign toggles + strings
     for field in [
-        # toggles
         "enable_speaker_alert", "enable_phone_alert", "enable_email_alert", "enable_sms_alert",
-
-        # provider switch
         "telephony_provider",
-
-        # SMTP
         "smtp_server", "smtp_username", "smtp_password", "smtp_notify_text",
-
-        # Twilio
         "twilio_username", "twilio_token", "twilio_api_secret", "twilio_source_number", "twilio_notify_text",
-
-        # ClickSend
         "clicksend_username", "clicksend_api_key", "clicksend_from", "clicksend_voice_from", "clicksend_notify_text",
-
-        # MQTT
         "mqtt_host", "mqtt_user", "mqtt_password", "mqtt_topic_base",
     ]:
         if field in data:
@@ -228,7 +225,7 @@ def api_audio_settings_put():
     act = (data.get("solenoid_activated_audio") or "").strip() or None
     deact = (data.get("solenoid_deactivated_audio") or "").strip() or None
 
-    # Validate that chosen files exist (if provided)
+    # Validate chosen files exist
     if act and not ensure_exists(act):
         return jsonify({"error": f"File not found: {act}"}), 400
     if deact and not ensure_exists(deact):
@@ -242,10 +239,8 @@ def api_audio_settings_put():
             vol = int(data["volume"])
             if not (0 <= vol <= 100):
                 return jsonify({"error": "volume must be 0-100"}), 400
-            # Apply immediately to ALSA
-            set_system_volume(vol)
-            # Persist (optional; handy for reference/backup)
-            setattr(s, "audio_volume", vol)
+            set_system_volume(vol)           # apply to ALSA immediately
+            setattr(s, "audio_volume", vol)  # persist our copy
         except Exception as e:
             return jsonify({"error": f"Failed to set system volume: {e}"}), 500
 
@@ -262,15 +257,23 @@ def api_audio_upload():
         return jsonify(info), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
+    except Exception:
         current_app.logger.exception("Audio upload failed")
         return jsonify({"error": "Upload failed"}), 500
+
+@bp.post("/api/audio/delete")
+def api_audio_delete():
+    data = request.get_json(force=True) or {}
+    fn = (data.get("filename") or "").strip()
+    ok, err = delete_audio(fn)
+    if not ok:
+        return jsonify({"error": err or "delete failed"}), 400
+    return jsonify({"status": "ok"})
 
 # Stream audio to the browser
 @bp.get("/audio/<path:filename>")
 def audio_file(filename: str):
     return serve_file(filename)
-
 
 # --- Panel monitor API ---
 @bp.get("/api/panel/status")
@@ -448,7 +451,7 @@ def api_panel_debug_decode():
         except Exception:
             led_states[name] = False
 
-    # ---- Build annotated preview (thicker lines + labels)
+    # ---- Build annotated preview
     annotated = img.copy()
     th = max(2, int(round(min(h, w) * 0.006)))
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -488,60 +491,118 @@ def api_panel_debug_decode():
         "preview_jpeg_b64": preview_b64
     })
 
-# ---------- Administration UI ----------
+# ---------- Admin APIs ----------
 @bp.route("/admin")
 def admin_page():
     return render_template("admin.html")
 
-# ---------- Admin APIs ----------
-
+# --- Admin: log tail/download ---
 @bp.get("/api/admin/log/tail")
 def admin_log_tail():
     try:
         n = int(request.args.get("lines", "50"))
-    except ValueError:
+    except Exception:
         n = 50
     text = admin_ops.get_log_tail_text(current_app, n)
-    return jsonify({"text": text})
+    p = admin_ops.get_full_log_file(current_app)
+    dl_url = url_for("config_ui.admin_log_download") if p else None
+    return jsonify({"tail": text, "download_url": dl_url})
 
 @bp.get("/api/admin/log/download")
 def admin_log_download():
-    p = admin_ops.log_file_path(current_app)
-    if not p.exists():
-        return jsonify({"error": "Log file not found"}), 404
-    # Force download with a stable filename
+    p = admin_ops.get_full_log_file(current_app)
+    if not p:
+        return jsonify({"error": "No log file found"}), 404
     return send_file(str(p), as_attachment=True, download_name=p.name, mimetype="text/plain")
 
+# --- Admin: version/update/rollback/reboot ---
 @bp.get("/api/admin/version")
 def admin_version():
-    cur = admin_ops.get_current_version(current_app)
-    latest, err = admin_ops.get_latest_version_online()
+    cur = admin_ops.get_installed_version(current_app)
+    latest, err = admin_ops.get_latest_github_version()
     return jsonify({
         "current": cur,
         "latest": latest or None,
-        "error": err or None,
+        "error": (str(err) if err else None),
         "repo": admin_ops.REPO_SLUG,
+        "has_backup": admin_ops.backup_exists(current_app),
     })
 
 @bp.post("/api/admin/update")
 def admin_update():
-    ok, logs = admin_ops.update_from_github(current_app)
-    return jsonify({
-        "status": "ok" if ok else "error",
-        "log": logs,
-        "next_step": "reboot" if ok else None
-    }), (200 if ok else 500)
+    resp = admin_ops.update_firepi(current_app)
+    return jsonify(resp), (200 if resp.get("status") == "ok" else 500)
 
 @bp.post("/api/admin/rollback")
 def admin_rollback():
-    ok, logs = admin_ops.rollback_from_backup(current_app)
-    return jsonify({
-        "status": "ok" if ok else "error",
-        "log": logs,
-        "next_step": "reboot" if ok else None
-    }), (200 if ok else 500)
+    resp = admin_ops.rollback_from_backup(current_app)
+    return jsonify(resp), (200 if resp.get("status") == "ok" else 500)
 
 @bp.post("/api/admin/reboot")
 def admin_reboot():
-    ok, msg = admin_ops.reboot_system()
-    return jsonify({"status": "ok" if ok else "error", "message": msg}), (200 if ok else 500)
+    current_app.logger.info("Admin requested reboot")
+    resp = admin_ops.reboot_system()
+    if resp.get("status") != "ok":
+        current_app.logger.error("Reboot request failed: %s", resp.get("error"))
+    return jsonify(resp), (200 if resp.get("status") == "ok" else 500)
+
+# --- Admin: support bundle + remote uploads ---
+@bp.post("/api/admin/support/bundle")
+def admin_support_bundle():
+    data = request.get_json(silent=True) or {}
+    include = bool(data.get("include_snapshot", True))
+    ok, bundle_path, msg = admin_ops.create_support_bundle(current_app, include_snapshot=include)
+    if not ok or not bundle_path:
+        return jsonify({"status": "error", "error": msg}), 500
+    dl_url = url_for("config_ui.support_download", filename=bundle_path.name)
+    return jsonify({"status": "ok", "download_url": dl_url, "message": msg})
+
+
+@bp.get("/api/admin/support/download/<path:filename>")
+def support_download(filename: str):
+    sup = Path(current_app.instance_path) / "support"
+    return send_from_directory(sup, filename, as_attachment=True)
+
+@bp.post("/api/admin/support/upload")
+def admin_support_upload():
+    data = request.get_json(force=True) or {}
+    kind = (data.get("type") or "logs").strip().lower()
+
+    # Optional flags from UI
+    use_latest = bool(data.get("use_latest", True))            # default: reuse latest bundle
+    include = bool(data.get("include_snapshot", True))         # only used if we must create a new bundle
+
+    if kind == "logs":
+        ok, msg = admin_ops.upload_logs_to_remote(current_app)
+    elif kind == "snapshot":
+        ok, msg = admin_ops.upload_snapshot_to_remote(current_app)
+    elif kind == "bundle":
+        ok, msg = admin_ops.upload_bundle_to_remote(current_app, use_latest=use_latest, include_snapshot=include)
+    else:
+        return jsonify({"status": "error", "error": "unknown upload type"}), 400
+
+    return (jsonify({"status": "ok", "message": msg})
+            if ok else
+            (jsonify({"status": "error", "error": msg}), 500))
+
+
+@bp.post("/api/admin/support/upload-snapshot")
+def admin_support_upload_snapshot():
+    data = request.get_json(force=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "Missing url"}), 400
+    ok, msg = admin_ops.upload_snapshot(current_app, url)
+    return (jsonify({"status":"ok","message":msg or "Uploaded"}), 200) if ok else (jsonify({"error": msg or "Upload failed"}), 500)
+
+@bp.post("/api/admin/support/ping-remote")
+def admin_support_ping_remote():
+    from datetime import datetime
+    from pathlib import Path
+    tmpd = Path(current_app.instance_path) / "support"
+    tmpd.mkdir(parents=True, exist_ok=True)
+    tmpf = tmpd / f"ping_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
+    tmpf.write_text("hello from firepi\n", encoding="utf-8")
+
+    ok, msg = admin_ops._upload_path_to_remote(current_app, tmpf, "ping")
+    return (jsonify({"status": "ok", "message": msg}), 200) if ok else (jsonify({"status": "error", "error": msg}), 500)

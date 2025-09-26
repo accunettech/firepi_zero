@@ -1,28 +1,25 @@
-// --- helpers ---
-const $ = (s) => document.querySelector(s);
-async function apiGet(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-async function apiPost(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-function toast(msg){
-  const div = document.createElement('div'); div.className='position-fixed top-0 end-0 p-3'; div.style.zIndex=1080;
-  div.innerHTML = `<div class="toast align-items-center text-bg-dark border-0 show"><div class="d-flex">
-    <div class="toast-body">${msg}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
-  document.body.appendChild(div); setTimeout(()=>div.remove(),2500);
-}
-
-// --- state ---
 let rois = null; // {lcd_rois:{lcd1:{x1,y1,x2,y2},...}, led_rois:{...}, seg_threshold,lcd_inverted, led_red_thresh:{sat,val}, digit_count_per_lcd}
 let drawing = false, startPt = null, curPt = null;
-let imgW=0, imgH=0;
 
-// --- elements ---
 const img = $('#snapImg');
 const canvas = $('#calibCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- sizing ---
 function fitCanvas(){
-  canvas.width = img.clientWidth;
-  canvas.height = img.clientHeight;
+  if (!img || !canvas || !ctx) return;
+
+  // CSS size
+  const cssW = img.clientWidth;
+  const cssH = img.clientHeight;
+
+  // Scale for device pixel ratio so lines are crisp
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = Math.max(1, Math.floor(cssW * dpr));
+  canvas.height = Math.max(1, Math.floor(cssH * dpr));
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // scale drawing ops back to CSS pixels
+
   drawOverlay();
 }
 window.addEventListener('resize', fitCanvas);
@@ -38,14 +35,18 @@ function naturalToView(x, y){
   return [Math.round(x * sx), Math.round(y * sy)];
 }
 
-// --- overlay drawing ---
 function drawRectView(x1,y1,x2,y2,color='#22c55e'){
-  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
   ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
   ctx.setLineDash([]);
 }
 function drawOverlay(){
-  if (!img.complete || !rois) { ctx.clearRect(0,0,canvas.width,canvas.height); return; }
+  if (!img || !img.complete || !rois || !ctx) {
+    if (ctx) ctx.clearRect(0,0,canvas.width,canvas.height);
+    return;
+  }
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   // Draw existing rectangles
@@ -82,14 +83,13 @@ canvas.addEventListener('mouseup', e => {
 
   const [nx1, ny1] = viewToNatural(startPt.x, startPt.y);
   const [nx2, ny2] = viewToNatural(curPt.x, curPt.y);
-  const rect = { x1: Math.min(nx1,nx2), y1: Math.min(ny1,ny2), x2: Math.max(nx1,nx2), y2: Math.max(ny2,ny1) };
+  const rect = { x1: Math.min(nx1,nx2), y1: Math.min(ny1,ny2), x2: Math.max(nx1,nx2), y2: Math.max(ny1,ny2) };
 
   if (grp === 'lcd') rois.lcd_rois[key] = rect; else rois.led_rois[key] = rect;
   $('#curRect').textContent = `${rect.x1},${rect.y1} → ${rect.x2},${rect.y2}`;
   drawOverlay();
 });
 
-// --- UI bindings ---
 function bindControls(){
   $('#segThr').value = rois.seg_threshold ?? 0.55;
   $('#segThrVal').textContent = $('#segThr').value;
@@ -105,7 +105,6 @@ function bindControls(){
   $('#ledVal').addEventListener('input', e => { rois.led_red_thresh = rois.led_red_thresh||{}; rois.led_red_thresh.val = parseInt(e.target.value||'120',10); });
 }
 
-// --- snapshot handling ---
 async function loadSnapshot(){
   try{
     const r = await fetch('/api/panel/snapshot?cb=' + Date.now());
@@ -120,11 +119,10 @@ async function loadSnapshot(){
     };
     img.src = url;
   }catch(e){
-    $('#calibError').classList.remove('d-none');
+    $('#calibError')?.classList.remove('d-none');
   }
 }
 
-// --- load/save ROIs ---
 async function loadRois(){
   const j = await apiGet('/api/panel/rois');
   rois = {
@@ -157,31 +155,33 @@ async function saveRois(){
   toast('ROIs saved');
 }
 
-// --- buttons ---
 document.addEventListener('DOMContentLoaded', async () => {
-  $('#btnSnapshot').addEventListener('click', loadSnapshot);
-  $('#btnSaveRois').addEventListener('click', async ()=>{
-    const btn = $('#btnSaveRois'); const html = btn.innerHTML;
-    btn.disabled = true; btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Saving…`;
+  $('#btnSnapshot')?.addEventListener('click', loadSnapshot);
+
+  const btnSave = $('#btnSaveRois');
+  btnSave?.addEventListener('click', async ()=>{
+    const html = btnSave.innerHTML;
+    btnSave.disabled = true; btnSave.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Saving…`;
     try { await saveRois(); } catch(e){ toast('Save failed: '+(e.message||e)); }
-    finally { btn.disabled = false; btn.innerHTML = html; }
+    finally { btnSave.disabled = false; btnSave.innerHTML = html; }
   });
-  $('#btnReloadWorker').addEventListener('click', async ()=>{
-    const btn = $('#btnReloadWorker'); const html = btn.innerHTML;
-    btn.disabled = true; btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Reloading…`;
+
+  const btnReload = $('#btnReloadWorker');
+  btnReload?.addEventListener('click', async ()=>{
+    const html = btnReload.innerHTML;
+    btnReload.disabled = true; btnReload.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Reloading…`;
     try { await apiPost('/api/panel/reload', {}); toast('Worker reloaded'); } catch(e){ toast('Reload failed'); }
-    finally { btn.disabled=false; btn.innerHTML = html; }
+    finally { btnReload.disabled=false; btnReload.innerHTML = html; }
   });
 
   try {
     await loadRois();
     await loadSnapshot();
   } catch (e){
-    $('#calibError').classList.remove('d-none');
+    $('#calibError')?.classList.remove('d-none');
   }
 });
 
-// --- reuse a tiny seven-seg renderer (same mapping as panel.js) ---
 const DIGIT_SEGMENTS = {
   "0":[1,1,1,1,1,1,0], "1":[0,1,1,0,0,0,0], "2":[1,1,0,1,1,0,1], "3":[1,1,1,1,0,0,1],
   "4":[0,1,1,0,0,1,1], "5":[1,0,1,1,0,1,1], "6":[1,0,1,1,1,1,1], "7":[1,1,1,0,0,0,0],
@@ -208,7 +208,6 @@ function setLed(id, on) {
   if (el) el.classList.toggle('on', !!on);
 }
 
-// --- dry-run: upload photo -> decode on server ---
 document.addEventListener('DOMContentLoaded', () => {
   const fileInput = document.getElementById('testFile');
   if (!fileInput) return;
