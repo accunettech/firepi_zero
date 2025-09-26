@@ -16,7 +16,7 @@ async function apiPost(url, body) {
   return r.json();
 }
 
-// ---------- Toast ----------
+// ---------- Toast (brief, success-only) ----------
 function toast(message) {
   const wrap = document.createElement("div");
   wrap.className = "position-fixed top-0 end-0 p-3";
@@ -29,7 +29,7 @@ function toast(message) {
       </div>
     </div>`;
   document.body.appendChild(wrap);
-  setTimeout(() => wrap.remove(), 2600);
+  setTimeout(() => wrap.remove(), 2200);
 }
 
 // ---------- Version helpers ----------
@@ -108,7 +108,6 @@ async function loadVersions() {
     $("#verLatest").textContent  = "—";
     if (btnUpdate())  btnUpdate().disabled = true;
     if (btnRollback()) btnRollback().disabled = true;
-    toast("Failed to load version info");
   }
 }
 
@@ -135,7 +134,6 @@ async function refreshLogs() {
 
 async function checkLatest() {
   await loadVersions();
-  toast("Checked latest version");
 }
 
 // ---------- Reboot detection/polling ----------
@@ -158,9 +156,9 @@ function waitForRebootAndReload() {
   const loop = async () => {
     const ok = await pingOnce(2500);
     if (!ok) {
-      seenDown = true;              // device went away at least once
+      seenDown = true;
     } else if (seenDown) {
-      location.reload();            // back online after being down -> reload
+      location.reload();
       return;
     }
     setTimeout(loop, 2000);
@@ -168,7 +166,7 @@ function waitForRebootAndReload() {
   loop();
 }
 
-// ---------- Actions ----------
+// ---------- Update / Rollback / Reboot ----------
 async function doUpdate() {
   if (!confirm("Update FirePi from GitHub (main)? A single backup will be overwritten. Continue?")) return;
 
@@ -178,22 +176,17 @@ async function doUpdate() {
   try {
     const j = await apiPost("/api/admin/update");
     if (j.status === "ok") {
-      // Success: show success copy, ask device to reboot, then wait for it to come back
       progressUpdate("Update successful. Restarting…", "Do not close this page.");
-      try { await apiPost("/api/admin/reboot"); } catch (_) { /* swallow */ }
+      try { await apiPost("/api/admin/reboot"); } catch {}
       waitForRebootAndReload();
     } else {
       progressUpdate("Update finished with issues", "Check Logs below for details.");
       setAllControlsDisabled(false);
-      // keep modal visible so the user sees the message; optionally hide after a delay:
-      // setTimeout(progressHide, 2500);
     }
-  } catch (e) {
+  } catch {
     progressUpdate("Update failed", "See Logs below for details.");
     setAllControlsDisabled(false);
-    // setTimeout(progressHide, 2500);
   } finally {
-    // Refresh displayed versions in case the page stays up (e.g., reboot not granted)
     loadVersions().catch(()=>{});
     refreshLogs().catch(()=>{});
   }
@@ -209,10 +202,8 @@ async function doRollback() {
     const j = await apiPost("/api/admin/rollback");
     $("#updateStatus").textContent = j.status || "Rollback complete.";
     await loadVersions();
-    toast(j.status === "ok" ? "Rollback complete; reboot recommended." : "Rollback finished with issues");
   } catch {
     $("#updateStatus").textContent = "Rollback failed.";
-    toast("Rollback failed");
   }
 }
 
@@ -222,9 +213,7 @@ async function doReboot() {
     await apiPost("/api/admin/reboot");
     progressShow("Rebooting…", "Waiting for device to come back online.");
     waitForRebootAndReload();
-  } catch {
-    toast("Reboot request failed");
-  }
+  } catch {}
 }
 
 // ---------- Audio maintenance ----------
@@ -268,11 +257,8 @@ async function loadAudioAdmin() {
         if (!confirm(`Delete audio file "${name}"?`)) return;
         try {
           await fetch(`/api/admin/audio/${encodeURIComponent(name)}`, { method: "DELETE" });
-          toast("Audio deleted");
           await loadAudioAdmin();
-        } catch {
-          toast("Delete failed");
-        }
+        } catch {}
       });
     });
   } catch {
@@ -283,7 +269,90 @@ async function loadAudioAdmin() {
   }
 }
 
-// ---------- Support / bundle ----------
+// ---------- Support / bundle (with spinner) ----------
+async function createBundle() {
+  const include = document.getElementById("includeSnapshot")?.checked ?? true;
+
+  setAllControlsDisabled(true);
+  progressShow("Building bundle…", "Collecting logs, ROIs and metadata.");
+
+  try {
+    const r = await fetch("/api/admin/support/bundle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ include_snapshot: include })
+    });
+    const j = await r.json();
+
+    if (!r.ok) throw new Error(j.error || "Bundle failed");
+
+    // enable download button
+    const a = document.getElementById("btnDownloadBundle");
+    if (a && j.download_url) { a.classList.remove("disabled"); a.href = j.download_url; a.removeAttribute("aria-disabled"); }
+
+    progressHide();
+    toast("Bundle built");
+  } catch {
+    progressUpdate("Bundle failed", "See Logs for details.");
+    setTimeout(progressHide, 1500);
+  } finally {
+    setAllControlsDisabled(false);
+  }
+}
+
+async function uploadBundle() {
+  const include = document.getElementById("includeSnapshot")?.checked ?? true;
+
+  setAllControlsDisabled(true);
+  progressShow("Uploading bundle…", "Sending to remote server.");
+
+  try {
+    const r = await fetch("/api/admin/support/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "bundle",
+        use_latest: true,
+        include_snapshot: include
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Upload failed");
+
+    progressHide();
+    toast("Bundle uploaded");
+  } catch {
+    progressUpdate("Upload failed", "Check remote endpoint and network.");
+    setTimeout(progressHide, 1500);
+  } finally {
+    setAllControlsDisabled(false);
+  }
+}
+
+async function uploadSnapshotOnly() {
+  setAllControlsDisabled(true);
+  progressShow("Uploading snapshot…", "Sending latest camera snapshot.");
+
+  try {
+    const r = await fetch("/api/admin/support/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "snapshot" })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Upload failed");
+
+    progressHide();
+    toast("Snapshot uploaded");
+  } catch {
+    progressUpdate("Snapshot upload failed", "Check remote endpoint and camera.");
+    setTimeout(progressHide, 1500);
+  } finally {
+    setAllControlsDisabled(false);
+  }
+}
+
+// ---------- Init ----------
 document.addEventListener("DOMContentLoaded", async () => {
   // Modal instance
   const pm = document.getElementById("progressModal");
@@ -306,45 +375,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btnRefreshAudioAdmin")?.addEventListener("click", loadAudioAdmin);
   await loadAudioAdmin().catch(()=>{});
 
-  // Bundle & uploads
-  document.getElementById("btnCreateBundle")?.addEventListener("click", async () => {
-    const include = document.getElementById("includeSnapshot")?.checked ?? true;
-    const r = await fetch("/api/admin/support/bundle", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ include_snapshot: include })
-    });
-    const j = await r.json();
-    if (!r.ok) { toast(j.error || "Bundle failed"); return; }
-    const a = document.getElementById("btnDownloadBundle");
-    if (a) { a.classList.remove("disabled"); a.href = j.download_url; }
-    document.getElementById("supportStatus").textContent = j.message || "Bundle ready";
-  });
-
-  document.getElementById("btnUploadBundle")?.addEventListener("click", async () => {
-    const include = document.getElementById("includeSnapshot")?.checked ?? true;
-    const r = await fetch("/api/admin/support/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "bundle",
-        use_latest: true,
-        include_snapshot: include
-      })
-    });
-    const j = await r.json();
-    if (!r.ok) { toast(j.error || "Upload failed"); return; }
-    toast(j.message || "Uploaded");
-  });
-
-  document.getElementById("btnUploadSnapshot")?.addEventListener("click", async () => {
-    const r = await fetch("/api/admin/support/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "snapshot" })
-    });
-    const j = await r.json();
-    if (!r.ok) { toast(j.error || "Upload failed"); return; }
-    toast(j.message || "Uploaded");
-  });
+  // Bundle & uploads (use spinner versions)
+  document.getElementById("btnCreateBundle")?.addEventListener("click", createBundle);
+  document.getElementById("btnUploadBundle")?.addEventListener("click", uploadBundle);
+  document.getElementById("btnUploadSnapshot")?.addEventListener("click", uploadSnapshotOnly);
 });
