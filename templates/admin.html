@@ -33,11 +33,16 @@
         <small class="text-muted d-block">
           One backup is kept and overwritten on each update. If there is a problem with your update, roll back immediately.
         </small>
+        <small class="text-muted d-block mt-2">
+          <strong>Note:</strong> after a successful update, FirePi will automatically reboot. This page will reconnect when the device is back online.
+        </small>
         <div id="updateStatus" class="mt-3 small text-muted"></div>
       </div>
     </div>
   </div>
+
   <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+
   <div class="col-12 col-lg-6">
     <div class="card shadow-sm">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -55,6 +60,7 @@
       </div>
     </div>
   </div>
+
   <div class="col-12 col-lg-6">
     <div class="card shadow-sm">
       <div class="card-header">
@@ -66,8 +72,7 @@
           <button class="btn btn-outline-light" id="btnCreateBundle">
             <i class="bi bi-archive me-1"></i>Create Bundle
           </button>
-          <a class="btn btn-primary disabled" id="btnDownloadBundle" href="#" download
-            aria-disabled="true" tabindex="-1">
+          <a class="btn btn-primary disabled" id="btnDownloadBundle" href="#" download aria-disabled="true" tabindex="-1">
             <i class="bi bi-download me-1"></i>Download Bundle
           </a>
           <button class="btn btn-outline-light" id="btnUploadBundle">
@@ -77,6 +82,7 @@
             <i class="bi bi-cloud-upload me-1"></i>Upload Snapshot Only
           </button>
         </div>
+
         <div class="mt-3">
           <div class="form-check m-0">
             <input class="form-check-input" type="checkbox" id="includeSnapshot" checked>
@@ -85,13 +91,14 @@
             </label>
           </div>
         </div>
-        <div id="supportStatus" class="mt-2 small text-muted">
-          No bundle created yet.
-        </div>
+
+        <div id="supportStatus" class="mt-2 small text-muted">No bundle created yet.</div>
       </div>
     </div>
   </div>
+
   <div class="section-divider divider-space-md" role="separator" aria-hidden="true"></div>
+
   <div class="col-12">
     <div class="card shadow-sm">
       <div class="card-header d-flex align-items-center justify-content-between">
@@ -110,6 +117,21 @@
       </div>
       <div class="card-body">
         <textarea id="logTail" class="form-control font-monospace" rows="12" readonly style="white-space:pre; resize:vertical;"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Progress modal (blocking) -->
+<div class="modal fade" id="progressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-body d-flex align-items-center gap-3">
+        <div class="spinner-border text-light" role="status" aria-hidden="true"></div>
+        <div>
+          <div id="progressText" class="fw-semibold">Working…</div>
+          <small id="progressSub" class="text-muted">Please wait…</small>
+        </div>
       </div>
     </div>
   </div>
