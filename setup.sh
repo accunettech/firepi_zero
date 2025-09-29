@@ -206,17 +206,6 @@ else
   run_as_user "'$VENV_PIP' install 'Flask>=3,<4' 'Flask-SQLAlchemy>=3.1,<4' 'SQLAlchemy>=2,<3' 'PyYAML>=6,<7' 'paho-mqtt==1.6.1' 'twilio>=8,<9' 'clicksend-client==5.0.78' 'gpiozero>=1.6,<2'"
 fi
 
-# Quick import check for cv2 via venv (should resolve to system package)
-echo "==> Sanity check: importing cv2 via venv ..."
-if ! run_as_user "'$VENV_PY' - <<'PY'
-import cv2, numpy
-print('cv2:', cv2.__version__)
-print('numpy:', numpy.__version__)
-PY
-"; then
-  echo "WARNING: Could not import cv2/numpy inside the venv. Ensure python3-opencv and python3-numpy are installed." >&2
-fi
-
 # ---------- systemd unit ----------
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 echo "==> Writing ${UNIT_FILE} ..."
