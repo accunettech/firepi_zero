@@ -74,5 +74,21 @@
   <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
   <script src="{{ url_for('static', filename='js/base.js') }}"></script>
   {% block scripts %}{% endblock %}
+
+  <!-- Global progress modal -->
+  <div class="modal fade" id="progressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content bg-dark text-light">
+        <div class="modal-body d-flex align-items-center gap-3">
+          <div class="spinner-border text-light" role="status" aria-hidden="true"></div>
+          <div>
+            <div id="progressText" class="fw-semibold">Working…</div>
+            <small id="progressSub" class="text-muted">Please wait…</small>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

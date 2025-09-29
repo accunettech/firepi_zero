@@ -140,3 +140,24 @@
     drawer?.addEventListener("shown.bs.offcanvas", () => refreshHistory(100));
   });
 })();
+
+
+  // --- progress modal helpers ---
+  let __progressModalInst = null;
+  function __ensureProgressModal() {
+    const el = document.getElementById('progressModal');
+    if (!el) return null;
+    if (!__progressModalInst) {
+      __progressModalInst = bootstrap.Modal ? new bootstrap.Modal(el, { backdrop: 'static', keyboard: false }) : null;
+    }
+    return __progressModalInst;
+  }
+  window.showProgress = (title, subtext) => {
+    const m = __ensureProgressModal(); if (!m) return;
+    const t = document.getElementById('progressText'); if (t) t.textContent = title || 'Working…';
+    const s = document.getElementById('progressSub');  if (s) s.textContent = subtext || 'Please wait…';
+    m.show();
+  };
+  window.hideProgress = () => {
+    if (__progressModalInst) __progressModalInst.hide();
+  };

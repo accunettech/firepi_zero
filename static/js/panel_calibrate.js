@@ -21,6 +21,7 @@ function fitCanvas(){
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // scale drawing ops back to CSS pixels
 
   drawOverlay();
+  try { hideProgress(); } catch(e){}
 }
 window.addEventListener('resize', fitCanvas);
 
@@ -88,6 +89,7 @@ canvas.addEventListener('mouseup', e => {
   if (grp === 'lcd') rois.lcd_rois[key] = rect; else rois.led_rois[key] = rect;
   $('#curRect').textContent = `${rect.x1},${rect.y1} → ${rect.x2},${rect.y2}`;
   drawOverlay();
+  try { hideProgress(); } catch(e){}
 });
 
 function bindControls(){
@@ -106,6 +108,7 @@ function bindControls(){
 }
 
 async function loadSnapshot(){
+  try { showProgress('Fetching snapshot', 'Capturing current frame…'); } catch(e){}
   try{
     const r = await fetch('/api/panel/snapshot?cb=' + Date.now());
     if (!r.ok) throw new Error(await r.text());
@@ -135,6 +138,7 @@ async function loadRois(){
   };
   bindControls();
   drawOverlay();
+  try { hideProgress(); } catch(e){}
 }
 
 async function saveRois(){
@@ -170,7 +174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnReload?.addEventListener('click', async ()=>{
     const html = btnReload.innerHTML;
     btnReload.disabled = true; btnReload.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Reloading…`;
-    try { await apiPost('/api/panel/reload', {}); toast('Worker reloaded'); } catch(e){ toast('Reload failed'); }
+    try { showProgress('Reloading worker','Applying ROI settings…'); await apiPost('/api/panel/reload', {}); toast('Worker reloaded'); } catch(e){ toast('Reload failed'); } finally { try{ hideProgress(); }catch(e){} }
     finally { btnReload.disabled=false; btnReload.innerHTML = html; }
   });
 

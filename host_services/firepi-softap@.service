@@ -1,0 +1,10 @@
+[Unit]
+Description=FirePi SoftAP window (%I)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/firepi-softap.sh start %i
+ExecStop=/usr/local/bin/firepi-softap.sh stop

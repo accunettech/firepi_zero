@@ -308,6 +308,15 @@ class PanelMonitor:
         except FileNotFoundError:
             cfg = {}
 
+        # Normalize legacy keys
+        if 'seg_threshold' in cfg and 'seg_frac_thr' not in cfg:
+            try:
+                cfg['seg_frac_thr'] = float(cfg.get('seg_threshold', 0.10))
+            except Exception:
+                cfg['seg_frac_thr'] = 0.10
+        if 'led_red_thresh' in cfg and 'led_thr' not in cfg:
+            t = cfg.get('led_red_thresh') or {}
+            cfg['led_thr'] = {'sat': int(t.get('sat',110)), 'val': int(t.get('val',120)), 'frac': 0.12}
         # Provide safe defaults if keys are missing
         cfg.setdefault("lcd_rois", {"lcd1": None, "lcd2": None, "lcd3": None, "lcd4": None})
         cfg.setdefault(

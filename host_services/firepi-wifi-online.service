@@ -1,0 +1,11 @@
+[Unit]
+Description=FirePi bring-up Wi-Fi (try known first)
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/firepi-wifi-online.sh
+
+[Install]
+WantedBy=multi-user.target

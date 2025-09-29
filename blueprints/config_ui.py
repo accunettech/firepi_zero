@@ -425,7 +425,7 @@ def api_panel_debug_decode():
         x1, y1, x2, y2 = r
         sub = gray[y1:y2, x1:x2]
         try:
-            val = _read_lcd(sub, digits=digits, inverted=inverted, thr=seg_thr)
+            val = _read_lcd(sub, digits=digits, inverted=inverted, frac_thr=seg_thr)
         except Exception:
             val = ""
         lcd_vals.append(val)
@@ -605,3 +605,42 @@ def admin_support_ping_remote():
 
     ok, msg = admin_ops._upload_path_to_remote(current_app, tmpf, "ping")
     return (jsonify({"status": "ok", "message": msg}), 200) if ok else (jsonify({"status": "error", "error": msg}), 500)
+# ---------- Wi-Fi API ----------
+@bp.get("/api/wifi/status")
+def api_wifi_status():
+    from services.wifi_nm import status
+    return jsonify(status())
+
+@bp.get("/api/wifi/scan")
+def api_wifi_scan():
+    from services.wifi_nm import scan
+    try:
+        nets = scan()
+        return jsonify({"networks": nets})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@bp.post("/api/wifi/connect")
+def api_wifi_connect():
+    data = request.get_json(force=True) or {}
+    ssid = (data.get("ssid") or "").strip()
+    psk  = (data.get("psk") or "").strip()
+    from services.wifi_nm import connect
+    try:
+        resp = connect(ssid, psk, wait_s=20)
+        code = 200 if resp.get("status") == "ok" else 400
+        return jsonify(resp), code
+    except Exception as e:
+        return jsonify({"status":"error","error":str(e)}), 400
+
+@bp.post("/api/wifi/forget")
+def api_wifi_forget():
+    data = request.get_json(force=True) or {}
+    ssid = (data.get("ssid") or "").strip()
+    from services.wifi_nm import forget
+    try:
+        resp = forget(ssid)
+        code = 200 if resp.get("status") == "ok" else 400
+        return jsonify(resp), code
+    except Exception as e:
+        return jsonify({"status":"error","error":str(e)}), 400

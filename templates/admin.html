@@ -139,4 +139,49 @@
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}<div class="col-12">
+  <div class="card shadow-sm" id="wifiCard">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <div>
+        <div class="section-title">Wi‑Fi Setup</div>
+        <small class="text-muted">Join a network, or switch to a new one.</small>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge rounded-pill px-3 py-2 bg-secondary-subtle text-secondary-emphasis" id="wifiStatusPill">—</span>
+        <small class="text-muted">IP: <span id="wifiStatusIp">—</span></small>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12 col-lg-6">
+          <label class="form-label">Available Networks</label>
+          <div class="d-flex justify-content-between mb-2">
+            <small class="text-muted">Tap a network to populate the form.</small>
+            <button class="btn btn-outline-light btn-sm" id="btnWifiScan"><i class="bi bi-arrow-repeat me-1"></i>Scan</button>
+          </div>
+          <div class="list-group" id="wifiScanList" style="max-height: 260px; overflow:auto;"></div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <label class="form-label">Connect</label>
+          <div class="mb-2">
+            <label class="form-label">SSID</label>
+            <input type="text" class="form-control" id="wifiSsid" placeholder="Network name">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Passkey</label>
+            <input type="password" class="form-control" id="wifiPsk" placeholder="Password (leave blank if open)">
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-primary" id="btnWifiConnect"><i class="bi bi-wifi me-1"></i>Connect</button>
+            <button class="btn btn-outline-danger" id="btnWifiForget"><i class="bi bi-trash me-1"></i>Forget</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+{% block scripts %}{{ super() }}
+  <script src="{{ url_for('static', filename='js/wifi.js') }}"></script>
 {% endblock %}
