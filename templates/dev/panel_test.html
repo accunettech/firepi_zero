@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}FirePi – Panel Test{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header">
+        <div class="section-title">Panel OCR / LED Test (Dev)</div>
+        <small class="text-muted">Upload a snapshot, draw ROIs, then parse.</small>
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-3 align-items-end">
+          <div>
+            <label class="form-label">Snapshot image</label>
+            <input type="file" class="form-control" id="fileInput" accept="image/*">
+          </div>
+          <div>
+            <label class="form-label">Target</label>
+            <select class="form-select" id="targetSelect">
+              <optgroup label="LCDs">
+                <option value="lcd1">LCD #1</option>
+                <option value="lcd2">LCD #2</option>
+                <option value="lcd3">LCD #3</option>
+                <option value="lcd4">LCD #4</option>
+              </optgroup>
+              <optgroup label="LEDs">
+                <option value="opr_ctrl">OPR CTRL</option>
+                <option value="interlck">INTRLCK</option>
+                <option value="ptfi">PTFI</option>
+                <option value="flame">FLAME</option>
+                <option value="alarm">ALARM</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-light" id="btnClearOne">Clear Selected ROI</button>
+            <button class="btn btn-outline-light" id="btnClearAll">Clear All</button>
+          </div>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-primary" id="btnParse">Parse Now</button>
+          </div>
+        </div>
+        <hr class="my-3" />
+        <div class="row g-3">
+          <div class="col-12 col-lg-8">
+            <!-- add pointer-events:none to IMG; touch-action:none to CANVAS -->
+            <div class="position-relative border rounded" style="background:#0b1220;">
+              <img id="imgBase" alt="snapshot" class="w-100 d-block"
+                   draggable="false" ondragstart="return false"
+                   style="user-select:none; -webkit-user-drag:none; pointer-events:none;">
+              <canvas id="roiCanvas" style="position:absolute; inset:0;"></canvas>
+            </div>
+            <small class="text-muted d-block mt-2">Click and drag to draw the ROI for the selected target.</small>
+          </div>
+          <div class="col-12 col-lg-4">
+            <div class="bg-dark-subtle p-3 rounded-3">
+              <div class="fw-semibold mb-2">Options</div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small">Digits per LCD</label>
+                  <input type="number" min="1" max="8" value="4" class="form-control form-control-sm" id="optDigits">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">Seg threshold</label>
+                  <input type="number" step="0.01" value="0.55" class="form-control form-control-sm" id="optSegThr">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">LED Sat</label>
+                  <input type="number" min="0" max="255" value="110" class="form-control form-control-sm" id="optLedSat">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">LED Val</label>
+                  <input type="number" min="0" max="255" value="120" class="form-control form-control-sm" id="optLedVal">
+                </div>
+                <div class="col-12">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="optInverted" checked>
+                    <label class="form-check-label small" for="optInverted">LCD inverted (dark segments are ON)</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="bg-dark-subtle p-3 rounded-3 mt-3">
+              <div class="fw-semibold mb-2">ROIs</div>
+              <pre id="roiText" class="small m-0" style="white-space:pre-wrap;"></pre>
+            </div>
+            <div class="bg-dark-subtle p-3 rounded-3 mt-3">
+              <div class="fw-semibold mb-2">Results</div>
+              <pre id="resultText" class="small m-0" style="white-space:pre-wrap;">(none)</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/panel_test.js') }}"></script>
+{% endblock %}

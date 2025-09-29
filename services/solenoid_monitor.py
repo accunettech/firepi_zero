@@ -1,5 +1,6 @@
+# services/solenoid_monitor.py
 from __future__ import annotations
-import logging, time
+import logging, time, signal, atexit
 from typing import Optional
 from gpiozero import Button
 from db import log_alert_history, load_settings_dict
@@ -9,10 +10,11 @@ from .notification import (
     provider_call_out,
     provider_send_sms,
 )
-from .mqtt_pub import publish_event
+
+from .mqtt_pub import get_publisher
 
 try:
-    from flask import Flask  # for type hint only
+    from flask import Flask  # type: ignore
 except Exception:
     Flask = object  # type: ignore
 
@@ -25,6 +27,7 @@ class SolenoidMonitor:
 
     - Uses internal pull-up on GPIO25 (HIGH=open=OFF, LOW=closed=ON)
     - No internal worker thread; gpiozero handles edges.
+    - MQTT is REQUIRED and must be initialized by the app before start().
     """
 
     def __init__(
@@ -45,24 +48,47 @@ class SolenoidMonitor:
         self.started = False
 
         self._boot_ts = 0.0
-        self._last_change_ts = 0.0  # epoch seconds
+        self._last_change_ts = 0.0
+        self._last_alert_ts: float = 0.0
+        self._last_state: Optional[str] = None  # "ON"/"OFF"
 
         self._log = (app.logger if app and hasattr(app, "logger") else logging.getLogger(__name__))
 
-        self._last_state: Optional[str] = None  # "ON"/"OFF"
-        self._last_alert_ts: float = 0.0
+        # MQTT (provided by app)
+        self._pub = None
+        self._base = None
+        self._topic_state = None   # base/solenoid/state   (non-retained)
+        self._topic_status = None  # base/solenoid/status  (retained)
+
+        # graceful stop hook (only registered when start() succeeds)
+        self._sig_reg = False
 
     # ---------- public API ----------
     def external_alert(self, sensor: str, sensor_description: str, sensor_val: str, alert_text: str, force: bool = False):
-        # Other modules can trigger the same alert path
-        with self.app.app_context():
-            cfg = load_settings_dict()
+        cfg = self._load_cfg()
         self._send_alert_sequence(cfg, sensor, sensor_description, sensor_val, alert_text, force)
 
     def start(self):
         if self.started:
             return
 
+        if not self.app:
+            raise RuntimeError("SolenoidMonitor requires Flask app")
+
+        # MQTT must already be initialized by the app:
+        # - app.extensions['mqtt_publisher'] is a connected publisher
+        # - app.config['MQTT_TOPIC_BASE'] is the base topic
+        try:
+            self._pub = get_publisher(self.app)
+            self._pub_enabled = True
+            self._base = (self.app.config.get("MQTT_TOPIC_BASE") or "").rstrip("/")
+            self._topic_state  = f"{self._base}/solenoid/state"
+            self._topic_status = f"{self._base}/solenoid/status"
+        except Exception as e:
+            self._pub_enabled = False
+            logging.info(f"MQTT not connected: {e}")
+
+        # Init GPIO
         try:
             self._btn = Button(self.pin, pull_up=True, bounce_time=self.bounce_time)
         except Exception as e:
@@ -80,24 +106,42 @@ class SolenoidMonitor:
         self._boot_ts = time.time()
         self._log.info("Fuel solenoid initial state: %s", self._last_state)
 
-        # Publish initial state for UI/consumers
-        try:
-            cfg = self._load_cfg()
-            publish_event(cfg.get("mqtt") or {}, sensor="fuel_solenoid", value="APP_STARTUP_STATE:" + self._last_state, logger=self._log)
-        except Exception:
-            self._log.exception("Failed to publish initial MQTT state")
+        # Publish lifecycle + initial state
+        if self._pub_enabled:
+            self._publish_status("started")
+            self._publish_state_change(self._last_state, initial=True)
 
-        # Now wire callbacks
+        # Wire callbacks
         self._btn.when_pressed  = self._on_change   # closed -> ON
         self._btn.when_released = self._on_change   # open   -> OFF
         self.started = True
         self._log.info("Solenoid Monitor started on GPIO %s", self.pin)
-        if cur_pressed:
-            play_audio_pwm_async("startup_solenoid_activated.mp3", is_stock_audio=True, logger=self._log)
-        else:
-            play_audio_pwm_async("startup_solenoid_deactivated.mp3", is_stock_audio=True, logger=self._log)
+
+        # Ensure stop() runs on SIGTERM/SIGINT and interpreter exit
+        if not self._sig_reg:
+            try:
+                signal.signal(signal.SIGTERM, self._on_sig_exit)
+                signal.signal(signal.SIGINT, self._on_sig_exit)
+            except Exception:
+                pass
+            atexit.register(self._atexit_stop)
+            self._sig_reg = True
+
+        # Startup audio cue
+        play_audio_pwm_async(
+            "startup_solenoid_activated.mp3" if cur_pressed else "startup_solenoid_deactivated.mp3",
+            is_stock_audio=True,
+            logger=self._log
+        )
 
     def stop(self):
+        # lifecycle event first (best effort)
+        try:
+            if self._pub_enabled:
+                self._publish_status("stopped")
+        except Exception:
+            pass
+
         play_audio_pwm_async("shutdown.mp3", is_stock_audio=True, logger=self._log)
         try:
             if self._btn:
@@ -105,6 +149,8 @@ class SolenoidMonitor:
         except Exception:
             pass
         self.started = False
+
+        # DO NOT close the global MQTT publisher here (app owns it)
         self._log.info("Solenoid Monitor stopped.")
 
     def health(self) -> dict:
@@ -116,12 +162,85 @@ class SolenoidMonitor:
             "state": self._last_state,
             "last_change_ts": self._last_change_ts or None,
             "last_alert_ts": self._last_alert_ts or None,
-            "rate_limit_remaining_s": max(
-                0, int(self.min_alert_interval_s - (now - self._last_alert_ts))
-            ) if self._last_alert_ts else 0,
+            "rate_limit_remaining_s": (
+                max(0, int(self.min_alert_interval_s - (now - self._last_alert_ts)))
+                if self._last_alert_ts else 0
+            ),
         }
 
     # ---------- internals ----------
+    def _on_sig_exit(self, *_):
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+    def _atexit_stop(self):
+        try:
+            if self.started:
+                self.stop()
+        except Exception:
+            pass
+
+    def _load_cfg(self) -> dict:
+        try:
+            if self.app is not None:
+                with self.app.app_context():
+                    return load_settings_dict()
+            return load_settings_dict()
+        except Exception as e:
+            self._log.warning("Config load failed; using defaults. %s", e, exc_info=True)
+            return {}
+
+    # ---- MQTT publish wrappers ----
+    def _publish_status(self, status: str):
+        """Publish service lifecycle: started/stopped (retained)."""
+        if self._pub and self._topic_status:
+            payload = {
+                "event": "service_status",
+                "service": "solenoid_monitor",
+                "status": status,            # "started" | "stopped"
+                "ts": int(time.time()),
+            }
+            self._pub.publish_json(self._topic_status, payload, qos=0, retain=True)
+            self._log.info("SolenoidMonitor: status -> %s", status)
+
+    def _publish_state_change(self, state: str, initial: bool = False):
+        """Publish ON/OFF change (not retained)."""
+        if self._pub and self._topic_state:
+            payload = {
+                "event": "solenoid_state_change",
+                "state": state,              # "ON" | "OFF"
+                "initial": bool(initial),
+                "ts": int(time.time()),
+            }
+            self._pub.publish_json(self._topic_state, payload, qos=0, retain=False)
+            self._log.info("SolenoidMonitor: state -> %s%s", state, " (initial)" if initial else "")
+
+    # ---------- GPIO change handling ----------
+    def _on_change(self):
+        sensor_description = "Fuel solenoid"
+        try:
+            state = "ON" if (self._btn and self._btn.is_pressed) else "OFF"
+            if state == self._last_state:
+                return
+
+            prev = self._last_state
+            self._last_state = state
+            self._last_change_ts = time.time()
+            self._log.info("%s state %s -> %s", sensor_description, prev, state)
+
+            # MQTT state-change event
+            self._publish_state_change(state)
+
+            # Handle alert/speaker/email/sms/voice logic
+            cfg = self._load_cfg()
+            self._handle_state_change(cfg, sensor="fuel_solenoid", sensor_description=sensor_description, state=state)
+
+        except Exception as e:
+            self._log.exception("Error handling GPIO change: %s", e)
+
+    # ---------- alert / notification path ----------
     def _log_alert_history(
         self,
         alert_type: str,
@@ -133,18 +252,7 @@ class SolenoidMonitor:
         payload: dict | None = None,
     ):
         try:
-            if self.app is not None:
-                with self.app.app_context():
-                    log_alert_history(
-                        alert_type=alert_type,
-                        sensor=sensor,
-                        sensor_val=sensor_val,
-                        channel=channel,
-                        status=status,
-                        error_text=error_text,
-                        payload=payload,
-                    )
-            else:
+            with self.app.app_context():
                 log_alert_history(
                     alert_type=alert_type,
                     sensor=sensor,
@@ -157,41 +265,10 @@ class SolenoidMonitor:
         except Exception:
             self._log.warning("Alert history write failed.", exc_info=True)
 
-    def _load_cfg(self) -> dict:
-        try:
-            if self.app is not None:
-                with self.app.app_context():
-                    return load_settings_dict()
-            return load_settings_dict()
-        except Exception as e:
-            self._log.warning("Config load failed; using defaults. %s", e, exc_info=True)
-            return {}
-
-    def _on_change(self):
-        sensor = "fuel_solenoid"
-        sensor_description = "Fuel solenoid"
-        try:
-            state = "ON" if (self._btn and self._btn.is_pressed) else "OFF"
-            if state == self._last_state:
-                return
-
-            prev = self._last_state
-            self._last_state = state
-            self._last_change_ts = time.time()
-            self._log.info("%s state %s -> %s", sensor_description, prev, state)
-
-            cfg = self._load_cfg()
-            publish_event(cfg.get("mqtt") or {}, sensor=sensor, value=state, logger=self._log)
-            self._handle_state_change(cfg, sensor=sensor, sensor_description=sensor_description, state=state)
-
-        except Exception as e:
-            self._log.exception("Error handling GPIO change: %s", e)
-
     def _handle_state_change(self, cfg: dict, sensor: str, sensor_description: str, state: str):
         self._log.info(f"{sensor} ({sensor_description}) is now {state}")
 
         if state == "ON":
-            # Optional activation sound (non-blocking)
             if cfg.get("enable_speaker_alert"):
                 try:
                     play_audio_pwm_async(cfg.get("solenoid_activated_audio"), logger=self._log)

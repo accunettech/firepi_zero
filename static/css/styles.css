@@ -225,3 +225,13 @@ body { background:var(--bg); color:var(--ink); color-scheme:dark; }
   background: rgba(99,102,241,.18);
   color: #fff;
 }
+
+#imgBase {
+  pointer-events: none;       /* let the canvas receive all input */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+#roiCanvas {
+  z-index: 10;                /* keep canvas on top of the img */
+  touch-action: none;         /* avoid touch panning */
+}

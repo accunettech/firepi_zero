@@ -55,11 +55,28 @@
       // Prefer explicit state if provided
       const state = (j.state ?? j.solenoid_state ?? "").toString().toUpperCase();
       if (state === "ON" || state === "OFF") {
-        let age = "";
-        const ts = Number(j.last_change_ts);
+        const ts = Number(j.last_change_ts); // or j.last_change_s if that's your field
+        let age = "—";
+
+        const halfStr = (x) => {
+          const r = Math.round(x * 2) / 2;              // nearest 0.5
+          return Number.isInteger(r) ? String(r|0) : String(r);
+        };
+
         if (Number.isFinite(ts) && ts > 0) {
-          const delta = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-          age = delta < 60 ? `${delta}s` : `${Math.floor(delta / 60)}m`;
+          const delta = Math.max(0, Math.floor(Date.now() / 1000 - ts)); // seconds
+
+          if (delta < 60) {
+            age = `${delta}s`;
+          } else if (delta < 3600) {
+            age = `${Math.floor(delta / 60)}m`;
+          } else if (delta < 86400) {
+            age = `${halfStr(delta / 3600)}h`;          // nearest half-hour
+          } else if (delta <= 365 * 86400) {            // <= 365 days -> days
+            age = `${halfStr(delta / 86400)}d`;         // nearest half-day
+          } else {
+            age = `${halfStr(delta / (365 * 86400))}y`; // > 365 days -> nearest half-year
+          }
         }
         const label = age ? `${state} • ${age}` : state;
         if (state === "ON") setBadge(badge, "bg-success-subtle text-success-emphasis", label);

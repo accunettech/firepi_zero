@@ -2,7 +2,8 @@ import os, atexit, signal, logging, threading
 from flask import Flask, jsonify
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from db import db, init_db
+from db import db, init_db, get_or_create_settings
+from services.mqtt_pub import init_global_publisher
 from blueprints.config_ui import bp as config_ui_bp
 from services.solenoid_monitor import SolenoidMonitor
 from services.panel_monitor import PanelMonitor
@@ -72,12 +73,17 @@ def create_app(log_dir: str) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["LOG_DIR"] = log_dir
+    app.config["ENABLE_PANEL_TEST"] = os.getenv("ENABLE_PANEL_TEST", "true").lower() == "true"
 
     # DB
     init_db(app)
 
     # Blueprints (routes live here)
     app.register_blueprint(config_ui_bp)
+    if app.config['ENABLE_PANEL_TEST']:
+        logging.info("Registering development blueprint")
+        from services.dev_panel_test import dev_panel_test_bp
+        app.register_blueprint(dev_panel_test_bp)
 
     # Health
     @app.get("/healthz")
@@ -95,6 +101,21 @@ def create_app(log_dir: str) -> Flask:
 
     try:    
         app.extensions = getattr(app, "extensions", {})
+        with app.app_context():
+            s = get_or_create_settings()
+            mqtt_cfg = {
+                "host": s.mqtt_host,
+                "username": s.mqtt_user,
+                "password": s.mqtt_password,
+                "topic_base": s.mqtt_topic_base,
+            }
+            app.config['MQTT_TOPIC_BASE'] = mqtt_cfg.get("topic_base") or None
+
+        #init MQTT before starting monitors
+        try:
+            init_global_publisher(app, mqtt_cfg, client_id="firepi-main", timeout_s=10)
+        except Exception as e:
+            logging.info(f"MQTT connect failed: {e}")
 
         # Reuse if already present (e.g., hot reload)
         sm = app.extensions.get("solenoid_monitor")
@@ -113,11 +134,6 @@ def create_app(log_dir: str) -> Flask:
                 rois_path=rois_path,
                 use_picamera2=bool(int(os.getenv("USE_PICAMERA2", "1"))),
                 fps=float(os.getenv("PANEL_FPS", "2.0")),
-                mqtt={
-                    "enabled": bool(int(os.getenv("PANEL_MQTT_ENABLED", "0"))),
-                    "host": os.getenv("PANEL_MQTT_HOST", "localhost"),
-                    "topic": os.getenv("PANEL_MQTT_TOPIC", "furnace/panel"),
-                }
             )
             app.extensions["panel_monitor"] = pm
 

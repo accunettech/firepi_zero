@@ -6,3 +6,4 @@ paho-mqtt==1.6.1
 twilio>=8,<9
 clicksend-client==5.0.78
 gpiozero>=1.6,<2
+bluezero

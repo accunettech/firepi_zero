@@ -1,6 +1,4 @@
-# services/notification.py
 from __future__ import annotations
-
 import logging
 import threading
 import shutil

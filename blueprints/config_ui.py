@@ -1,7 +1,6 @@
-# blueprints/config_ui.py
 from flask import Blueprint, current_app, render_template, jsonify, request, send_file, url_for, send_from_directory
 import threading
-from pathlib import Path  # <-- needed for support_download
+from pathlib import Path
 from db import db, Recipient, AlertHistory, alert_history_as_dict, get_or_create_settings
 from services.audio import (
     list_audio_files,

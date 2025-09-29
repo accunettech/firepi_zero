@@ -1,6 +1,4 @@
-# services/admin_ops.py
 from __future__ import annotations
-
 import os
 import tarfile
 import tempfile
@@ -9,14 +7,10 @@ import subprocess as sp
 from pathlib import Path
 from typing import Optional, Tuple
 
-# ---------- repo/urls ----------
-
 # Show this in the UI; keep it human-friendly.
 REPO_SLUG = "accunettech/firepi_zero"
 RAW_VERSION_URL = f"https://raw.githubusercontent.com/{REPO_SLUG}/main/VERSION"
 TARBALL_URL = f"https://codeload.github.com/{REPO_SLUG}/tar.gz/refs/heads/main"
-
-# ---------- helpers ----------
 
 def _safe_run(cmd: list[str], *, cwd: Optional[str] = None, timeout: int = 60) -> Tuple[int, str, str]:
     try:
@@ -63,8 +57,6 @@ def _detect_venv_pip(app) -> Optional[Path]:
             return p
     return None
 
-# ---------- logs ----------
-
 def get_log_tail_text(app, lines: int = 50) -> str:
     lf = _current_log_path(app)
     if not lf:
@@ -75,8 +67,6 @@ def get_log_tail_text(app, lines: int = 50) -> str:
 
 def get_full_log_file(app) -> Optional[Path]:
     return _current_log_path(app)
-
-# ---------- versions ----------
 
 def get_installed_version(app) -> str:
     root = _app_root(app)
@@ -111,8 +101,6 @@ def get_latest_github_version(timeout: int = 6) -> tuple[Optional[str], Optional
     except Exception as e:
         err = str(e)
     return ver, err
-
-# ---------- update / rollback ----------
 
 def _tar_exclude(name: str) -> bool:
     base = name.strip("/")
@@ -298,13 +286,9 @@ def reboot_system() -> dict:
         last_err = (err or out or "").strip()
     return {"status": "error", "error": last_err or "reboot failed"}
 
-# Back-compat alias
 def get_current_log_for_download(app):
     return _current_log_path(app)
 
-# ---------- support bundle / snapshot ----------
-
-# --- snapshot save (to instance/support) ---
 def get_latest_support_bundle(app) -> Optional[Path]:
     sup = Path(app.instance_path) / "support"
     sup.mkdir(parents=True, exist_ok=True)
@@ -356,8 +340,6 @@ def save_snapshot_file(app, attempts: int = 5, sleep_ms: int = 300) -> Optional[
     app.logger.warning("save_snapshot_file: no snapshot bytes available")
     return None
 
-
-
 def create_support_bundle(app, include_snapshot: bool = True) -> tuple[bool, Optional[Path], str]:
     """
     Tar.gz bundle with logs, VERSION, panel_rois.yaml, requirements.txt, and optional snapshot.
@@ -402,11 +384,6 @@ def create_support_bundle(app, include_snapshot: bool = True) -> tuple[bool, Opt
     except Exception as e:
         app.logger.exception("[bundle] creation failed")
         return False, None, str(e)
-
-
-
-
-# ---------- remote uploads ----------
 
 def _upload_path_to_remote(app, path: Path, kind: str = "file") -> tuple[bool, str]:
     """
@@ -456,7 +433,6 @@ def _upload_path_to_remote(app, path: Path, kind: str = "file") -> tuple[bool, s
     except Exception as e:
         app.logger.exception("[upload] error posting %s", kind)
         return False, f"Upload error: {e}"
-
 
 
 def upload_logs_to_remote(app) -> tuple[bool, str]:

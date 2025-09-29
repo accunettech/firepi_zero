@@ -320,11 +320,6 @@
     </div>
   </div>
 </div>
-{% endblock %}
-{% block scripts %}
-  <script src="{{ url_for('static', filename='js/config.js') }}"></script>
-{% endblock %}
-
 <!-- Recipient Modal -->
 <div class="modal fade" id="recipientModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
@@ -362,3 +357,7 @@
     </div>
   </div>
 </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/config.js') }}"></script>
+{% endblock %}
