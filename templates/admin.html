@@ -136,10 +136,7 @@
     </div>
   </div>
 </div>
-{% endblock %}
-{% block scripts %}
-  <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
-{% endblock %}<div class="col-12">
+<div class="col-12">
   <div class="card shadow-sm" id="wifiCard">
     <div class="card-header d-flex align-items-center justify-content-between">
       <div>
@@ -180,8 +177,8 @@
     </div>
   </div>
 </div>
-
-
-{% block scripts %}{{ super() }}
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
   <script src="{{ url_for('static', filename='js/wifi.js') }}"></script>
 {% endblock %}
