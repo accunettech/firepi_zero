@@ -474,7 +474,7 @@ if [[ -n "$MAC" ]]; then MAC_SUFFIX="${MAC: -6}"; else TMP="${SER: -6}"; MAC_SUF
 if [[ ${#MAC_SUFFIX} -lt 6 ]]; then MAC_SUFFIX="$(printf '%06s' "$MAC_SUFFIX" | tr ' ' '0')"; fi
 AP_SSID="FirePi-${SER_SUFFIX}-${MAC_SUFFIX}"
 AP_PSK="FirePi${MAC_SUFFIX}"
-INFO_FILE="/var/lib/firepi/onboarding_info.txt"
+INFO_FILE="${APP_HOME}/instance/onboarding_info.txt"
 printf 'SSID: %s\nPSK : %s\n' "$AP_SSID" "$AP_PSK" | tee "$INFO_FILE"
 
 # Optionally open an immediate AP window by exporting FIREPI_START_SOFTAP=<duration>
@@ -588,35 +588,6 @@ if [[ -n "$MAC" ]]; then MAC_SUFFIX="${MAC: -6}"; else TMP="${SER: -6}"; MAC_SUF
 if [[ ${#MAC_SUFFIX} -lt 6 ]]; then MAC_SUFFIX="$(printf '%06s' "$MAC_SUFFIX" | tr ' ' '0')"; fi
 AP_SSID="FirePi-${SER_SUFFIX}-${MAC_SUFFIX}"
 AP_PSK="FirePi${MAC_SUFFIX}"
-printf 'SSID: %s\nPSK : %s\n' "$AP_SSID" "$AP_PSK" | tee "${APP_HOME}/instance/onboarding_info.txt"
-
-# ---------- final notes ----------
-echo
-echo "=============================================================="
-echo "SETUP COMPLETE. A reboot is recommended for I²S overlay to apply."
-echo "=============================================================="
-echo
-echo "Next steps:"
-echo "  1) Reboot now:"
-echo "       sudo reboot"
-echo
-echo "  2) After reboot, verify audio device and service:"
-echo "       aplay -l"
-echo "       cat /etc/asound.conf"
-echo "       systemctl status ${SERVICE_NAME}.service"
-echo "       journalctl -u ${SERVICE_NAME}.service -b --no-pager"
-echo
-echo "  3) Audio test (use a wav):"
-echo "       aplay /path/to/sound.wav"
-echo
-echo "  4) Open the app:"
-echo "       ${SELF_URL_HOST}"
-echo "       ${SELF_URL_IP}"
-echo
-echo "On-board AP:"
-echo "   SSID: ${AP_SSID}"
-echo "   PSK:  ${AP_PSK}"
-echo
 
 # === FirePi WiFi switch path/service (2025-09-30) ===
 # Adds a root-run service and a path watcher so the non-root app only writes
@@ -666,3 +637,31 @@ mkdir -p "${APP_HOME}/instance"
 # Reload and enable the path watcher
 sudo systemctl daemon-reload
 sudo systemctl enable --now firepi-wifi-switch.path
+
+# ---------- final notes ----------
+echo
+echo "=============================================================="
+echo "SETUP COMPLETE. A reboot is recommended for I²S overlay to apply."
+echo "=============================================================="
+echo
+echo "Next steps:"
+echo "  1) Reboot now:"
+echo "       sudo reboot"
+echo
+echo "  2) After reboot, verify audio device and service:"
+echo "       aplay -l"
+echo "       cat /etc/asound.conf"
+echo "       systemctl status ${SERVICE_NAME}.service"
+echo "       journalctl -u ${SERVICE_NAME}.service -b --no-pager"
+echo
+echo "  3) Audio test (use a wav):"
+echo "       aplay /path/to/sound.wav"
+echo
+echo "  4) Open the app:"
+echo "       ${SELF_URL_HOST}"
+echo "       ${SELF_URL_IP}"
+echo
+echo "On-board AP:"
+echo "   SSID: ${AP_SSID}"
+echo "   PSK:  ${AP_PSK}"
+echo
