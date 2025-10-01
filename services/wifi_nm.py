@@ -1,93 +1,103 @@
-from __future__ import annotations
 import subprocess as sp
-import time
-from typing import Dict, Any, List
+import os, json, time
+from typing import Dict, Any
+from pathlib import Path
 
-def _run(args: list[str], timeout: int = 20, check: bool = True) -> str:
-    r = sp.run(args, capture_output=True, text=True, timeout=timeout)
-    if check and r.returncode != 0:
-        raise RuntimeError(r.stderr.strip() or r.stdout.strip() or f"Command failed: {' '.join(args)}")
-    return r.stdout.strip()
+def _run(cmd, timeout: int = 6):
+    try:
+        return sp.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except sp.TimeoutExpired:
+        return sp.CompletedProcess(args=cmd, returncode=124, stdout="", stderr="timeout")
+
+def _wifi_iface() -> str:
+    r = _run(["nmcli", "-t", "-f", "DEVICE,TYPE", "dev", "status"], timeout=3)
+    for line in (r.stdout or "").splitlines():
+        parts = line.split(":")
+        if len(parts) >= 2 and parts[1] == "wifi":
+            return parts[0]
+    return "wlan0"
 
 def status() -> Dict[str, Any]:
-    try:
-        state = _run(["nmcli","-t","-f","STATE","g"], check=False) or "unknown"
-    except Exception:
-        state = "unknown"
-    ip = ""
-    try:
-        show = _run(["nmcli","-t","-f","GENERAL.CONNECTION,IP4.ADDRESS","dev","show","wlan0"], check=False)
-        # looks like: GENERAL.CONNECTION:<ssid>\nIP4.ADDRESS[1]:10.42.0.1/24
-        for line in show.splitlines():
-            if line.startswith("IP4.ADDRESS"):
-                ip = line.split(":",1)[-1]
-    except Exception:
-        pass
-    return {"state": state, "ip": ip}
+    iface = _wifi_iface()
+    r = _run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status"], timeout=3)
+    ssid = ""
+    state = "disconnected"
+    for line in (r.stdout or "").splitlines():
+        dev, typ, st, conn = (line.split(":") + ["", "", "", ""])[:4]
+        if typ == "wifi" and dev == iface:
+            state = st or "disconnected"
+            ssid = conn or ""
+    ap_active = ssid in ("FirePiAP", "Hotspot")
+    ip = _run(["bash", "-lc", f"ip -4 addr show {iface} | awk '/inet /{{print $2}}' | cut -d/ -f1"], timeout=3).stdout.strip()
+    ap_psk = ""
+    if ap_active:
+        try:
+            with open("/var/lib/firepi/ap_psk", "r") as f:
+                ap_psk = f.read().strip()
+        except Exception:
+            pass
+    return {"status": "ok", "mode": "ap" if ap_active else "sta", "state": state, "ip": ip, "ssid": ssid, "ap_psk": ap_psk}
 
-def scan() -> List[Dict[str, Any]]:
-    try:
-        _run(["nmcli","device","wifi","rescan"], check=False, timeout=10)
-    except Exception:
-        pass
-    out = _run(["nmcli","-t","-f","SSID,SIGNAL,SECURITY","device","wifi","list"], check=False, timeout=10)
+def scan() -> Dict[str, Any]:
+    ract = _run(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show", "--active"], timeout=3)
+    ap_active = any((ln.startswith("FirePiAP:wifi") or ln.startswith("Hotspot:wifi")) for ln in (ract.stdout or "").splitlines())
+    rescan_args = [] if not ap_active else ["--rescan", "no"]
+    if not ap_active:
+        _run(["nmcli", "device", "wifi", "rescan"], timeout=5)
+    r = _run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"] + rescan_args, timeout=6)
     nets = []
     seen = set()
-    for line in (out or "").splitlines():
-        parts = line.split(":")
-        if not parts: 
+    for line in (r.stdout or "").splitlines():
+        if not line:
             continue
-        ssid = parts[0].strip()
+        ssid, sig, sec = (line.split(":") + ["", "", ""])[:3]
         if not ssid or ssid in seen:
             continue
         seen.add(ssid)
-        sig = 0
         try:
-            sig = int((parts[1] or "0").strip())
-        except Exception:
-            pass
-        sec = (parts[2] if len(parts) > 2 else "").strip() or "UNKNOWN"
-        nets.append({"ssid": ssid, "signal": sig, "security": sec})
-    nets.sort(key=lambda x: (-x["signal"], x["ssid"]))
-    return nets
+            sig_i = int(sig) if sig else 0
+        except ValueError:
+            sig_i = 0
+        nets.append({"ssid": ssid, "signal": sig_i, "security": sec or ""})
+    return {"status": "ok", "ap_mode": ap_active, "networks": nets, "results": nets}
 
-def connect(ssid: str, psk: str, wait_s: int = 20) -> Dict[str, Any]:
+def connect(ssid: str, psk: str, wait_s: int = 0) -> Dict[str, Any]:
     ssid = (ssid or "").strip()
     psk  = (psk or "").strip()
     if not ssid:
-        return {"status":"error","error":"Missing SSID"}
-    # Try create or modify saved connection
-    exists = False
+        return {"status": "error", "error": "Missing SSID"}
+
+    # Write pending creds in app-local instance dir
+    app_root = Path(__file__).resolve().parents[1]   # /home/chris/firepi
+    instance_dir = Path(os.environ.get("FIREPI_INSTANCE_DIR", app_root / "instance"))
+    instance_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = instance_dir / "pending_wifi.json"
+    pending_path.write_text(json.dumps({"ssid": ssid, "psk": psk, "ts": time.time()}))
+
+    # Context for the UI (read AP PSK from instance if present)
+    ap_ssid = "FirePi-AP"
     try:
-        _run(["nmcli","-g","NAME","con","show", ssid], check=True)
-        exists = True
+        cpu = Path("/proc/cpuinfo").read_text()
+        if "Serial" in cpu:
+            ap_ssid = "FirePi-" + cpu.split("Serial")[-1].split("\n")[0].split(":")[-1].strip()[-4:]
     except Exception:
-        exists = False
-    if not exists:
-        args = ["nmcli","dev","wifi","connect", ssid]
-        if psk: args += ["password", psk]
-        _run(args, check=True, timeout=25)
-    else:
-        if psk:
-            _run(["nmcli","con","modify", ssid, f"wifi-sec.psk={psk}"], check=True)
-        _run(["nmcli","con","up", ssid], check=True)
+        pass
+    ap_psk = ""
+    for p in [instance_dir / "ap_psk"]:
+        if p.exists():
+            ap_psk = p.read_text().strip()
+            break
 
-    # Wait for connected state
-    for _ in range(max(1, wait_s)):
-        st = status().get("state","")
-        if st == "connected":
-            # Tear down AP if present
-            try:
-                sp.run(["/usr/local/bin/firepi-softap.sh","stop"], check=False)
-            except Exception:
-                pass
-            return {"status":"ok"}
-        time.sleep(1)
-    return {"status":"error","error":"Timeout waiting for connection"}
+    # Spawn the switch script directly (non-root)
+    #script = app_root / "wifi_scripts" / "firepi-wifi-switch.sh"
+    #if not script.exists():
+    #    return {"status": "error", "error": f"switch script not found: {script}"}
 
-def forget(ssid: str) -> Dict[str, Any]:
-    ssid = (ssid or "").strip()
-    if not ssid:
-        return {"status":"error","error":"Missing SSID"}
-    sp.run(["nmcli","con","delete", ssid], check=False)
-    return {"status":"ok"}
+    #env = dict(os.environ, APP_HOME=str(app_root), FIREPI_PENDING_WIFI=str(pending_path))
+    #try:
+    #    sp.Popen([str(script)], env=env, start_new_session=True)
+    #except Exception as e:
+    #    return {"status": "error", "error": f"spawn failed: {e}"}
+
+    # Return immediately; frontend should expect AP drop / reconnection
+    return {"status": "ok", "mode": "transitioning", "ap_ssid": ap_ssid, "ap_psk": ap_psk}

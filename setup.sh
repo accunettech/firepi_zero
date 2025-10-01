@@ -258,201 +258,14 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 SELF_URL_HOST="http://${HOST_NAME}:5000/"
 SELF_URL_IP="http://${HOST_IP}:5000/"
 
-# ---------- final notes ----------
-echo
-echo "=============================================================="
-echo "SETUP COMPLETE. A reboot is recommended for I²S overlay to apply."
-echo "=============================================================="
-echo
-echo "Next steps:"
-echo "  1) Reboot now:"
-echo "       sudo reboot"
-echo
-echo "  2) After reboot, verify audio device and service:"
-echo "       aplay -l"
-echo "       cat /etc/asound.conf"
-echo "       systemctl status ${SERVICE_NAME}.service"
-echo "       journalctl -u ${SERVICE_NAME}.service -b --no-pager"
-echo
-echo "  3) Audio test (use a wav):"
-echo "       aplay /path/to/sound.wav"
-echo
-echo "  4) Open the app:"
-echo "       ${SELF_URL_HOST}"
-echo "       ${SELF_URL_IP}"
-echo
-echo "Changes made:"
-echo "  - Installed: python3-venv, python3-pip, alsa-utils, mpg123, sox, libsox-fmt-mp3,"
-echo "               python3-numpy, python3-opencv, python3-gpiozero, python3-paho-mqtt,"
-echo "               (python3-picamera2 + libcamera-apps if available)"
-echo "  - Disabled: pigpiod.service"
-echo "  - Updated:  ${CONFIG_TXT} (dtparam=audio=off, dtoverlay=${OVERLAY})"
-echo "  - Wrote:    /etc/asound.conf (card 0 with softvol 'PCM')"
-echo "  - Created:  ${UNIT_FILE} (service uses venv with system site packages)"
-echo "  - Enabled:  ${SERVICE_NAME}.service (starts on next boot)"
-echo
-echo "If ALSA card index differs after reboot, adjust /etc/asound.conf (card 0 -> your card index)"
-echo "or re-run:"
-echo "  sudo bash $0 --app-dir '${APP_DIR}' --service-name '${SERVICE_NAME}' --overlay '${OVERLAY}' --card-id <your_card_id>"
-echo
-# === FirePi Wi‑Fi SoftAP on-boot provisioning (enforced AP settings) ===
-# Writes helper scripts/units and enables on-boot behavior:
-# If STA is not connected shortly after boot, start a 30-minute SoftAP and play onboarding WAV.
-set -euo pipefail
+# === FirePi WiFi SoftAP Onboarding + Background STA Switch (appended: 2025-09-30, MAC‑based SSID/PSK + final echo) ===
+# Adds SoftAP onboarding and a background WiFi switch with rollback.
+# PSK is "FirePi" + last 6 hex of Wi‑Fi MAC (no colons, uppercased).
+# SSID is "FirePi-<last4 of CPU serial>-<last6 of Wi‑Fi MAC>".
+# At the end of this script, we print SSID/PSK and save them to /var/lib/firepi/onboarding_info.txt
 
-echo "[firepi] Installing host dependencies (NetworkManager, Avahi, ALSA)…"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y --no-install-recommends network-manager avahi-daemon alsa-utils
-
-echo "[firepi] Enabling core services…"
-systemctl enable --now NetworkManager.service
-systemctl enable --now avahi-daemon.service || true
-
-echo "[firepi] Writing helper scripts…"
-install -d -m 0755 /usr/local/bin /usr/local/share/firepi /var/lib/firepi
-
-# firepi-softap.sh: create explicit AP profile with WPA2-PSK (CCMP), PMF disabled, 2.4 GHz ch 6
-cat > /usr/local/bin/firepi-softap.sh <<'EOF_SOFTAP'
-#!/usr/bin/env bash
-set -e -o pipefail
-
-# Determine SSID suffix from Pi serial (last 4 chars)
-AP_SSID="FirePi-$(awk -F': ' '/Serial/ { s=$2 } END{ print substr(s, length(s)-3) }' /proc/cpuinfo)"
-AP_PSK_FILE="/var/lib/firepi/ap_psk"
-mkdir -p "$(dirname "$AP_PSK_FILE")"
-if [[ ! -s "$AP_PSK_FILE" ]]; then
-  head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 12 > "$AP_PSK_FILE"
-fi
-AP_PSK="$(cat "$AP_PSK_FILE")"
-
-# pick Wi‑Fi iface
-IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
-
-case "${1:-}" in
-  start)
-    DURATION="${2:-30min}"
-    # Clean old AP profiles
-    nmcli con down Hotspot 2>/dev/null || true
-    nmcli con delete Hotspot 2>/dev/null || true
-    nmcli con down FirePiAP 2>/dev/null || true
-    nmcli con delete FirePiAP 2>/dev/null || true
-
-    # Create explicit, compatible AP profile
-    nmcli con add type wifi ifname "$IFACE" con-name FirePiAP autoconnect no ssid "$AP_SSID"
-    nmcli con modify FirePiAP       802-11-wireless.mode ap       802-11-wireless.band bg       802-11-wireless.channel 6       ipv4.method shared       ipv6.method ignore       wifi-sec.key-mgmt wpa-psk       wifi-sec.psk "$AP_PSK"       wifi-sec.group ccmp       wifi-sec.pairwise ccmp       wifi-sec.pmf disable
-
-    nmcli con up FirePiAP
-
-    echo "SoftAP up: SSID=$AP_SSID (PSK stored in $AP_PSK_FILE) window $DURATION"
-    echo "Open http://10.42.0.1 or http://firepi.local to configure."
-
-    # One-shot timer to stop after DURATION
-    systemd-run --unit firepi-softap-timer --on-active="$DURATION" --property=Type=oneshot /usr/local/bin/firepi-softap.sh stop >/dev/null 2>&1 || true
-    ;;
-
-  stop)
-    nmcli con down FirePiAP 2>/dev/null || true
-    nmcli con delete FirePiAP 2>/dev/null || true
-    systemctl stop firepi-softap-timer.service >/dev/null 2>&1 || true
-    echo "SoftAP stopped."
-    ;;
-
-  *)
-    echo "usage: $0 {start [duration]|stop}" ; exit 2 ;;
-esac
-EOF_SOFTAP
-chmod 0755 /usr/local/bin/firepi-softap.sh
-
-# firepi-wifi-online.sh: start AP if STA not connected; play onboarding WAV
-cat > /usr/local/bin/firepi-wifi-online.sh <<'EOF_ONLINE'
-#!/usr/bin/env bash
-set -e -o pipefail
-
-# Give NetworkManager a moment
-sleep 4
-
-# Try autoconnect to saved networks
-nmcli device wifi rescan >/dev/null 2>&1 || true
-
-# Wait a few seconds for NM to connect
-for i in {1..6}; do
-  STATE="$(nmcli -t -f STATE g 2>/dev/null || true)"
-  if [[ "$STATE" == "connected" ]]; then
-    exit 0
-  fi
-  sleep 2
-done
-
-# Not connected: start a 30-minute AP window
-systemctl start firepi-softap@30min.service || true
-
-# Play onboarding WAV if available
-WAV="${FIREPI_ONBOARD_WAV:-/usr/local/share/firepi/onboarding.wav}"
-if [[ -f "$WAV" ]]; then
-  aplay -q "$WAV" >/dev/null 2>&1 || true
-fi
-EOF_ONLINE
-chmod 0755 /usr/local/bin/firepi-wifi-online.sh
-
-echo "[firepi] Writing systemd units…"
-cat > /etc/systemd/system/firepi-softap@.service <<'EOF_UNIT_AP'
-[Unit]
-Description=FirePi SoftAP window (%i)
-After=NetworkManager.service
-Wants=NetworkManager.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/firepi-softap.sh start %i
-ExecStop=/usr/local/bin/firepi-softap.sh stop
-
-[Install]
-WantedBy=multi-user.target
-EOF_UNIT_AP
-
-cat > /etc/systemd/system/firepi-wifi-online.service <<'EOF_UNIT_ONLINE'
-[Unit]
-Description=FirePi Wi‑Fi bring-up (open AP if not connected)
-After=network.target NetworkManager.service
-Wants=NetworkManager.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/firepi-wifi-online.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF_UNIT_ONLINE
-
-echo "[firepi] Copying onboarding WAV…"
-# Copy from repo path ./audio/stock/ready_to_connect.wav if present
-SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-install -d -m 0755 /usr/local/share/firepi
-if [[ -f "${SCRIPT_DIR}/audio/stock/ready_to_connect.wav" ]]; then
-  install -m 0644 "${SCRIPT_DIR}/audio/stock/ready_to_connect.wav" /usr/local/share/firepi/onboarding.wav
-  echo "  + /usr/local/share/firepi/onboarding.wav installed"
-else
-  echo "  (onboarding WAV not found at ${SCRIPT_DIR}/audio/stock/ready_to_connect.wav; skipping copy)"
-fi
-
-echo "[firepi] Enabling services…"
-systemctl daemon-reload
-systemctl enable --now firepi-wifi-online.service
-
-# Optional: immediate AP window via env var
-if [[ -n "${FIREPI_START_SOFTAP:-}" ]]; then
-  systemctl start "firepi-softap@${FIREPI_START_SOFTAP}.service" || true
-fi
-
-echo "[firepi] Provisioning complete."
-
-# === FirePi Wi‑Fi SoftAP + background switch provisioning (2025-09-30) ===
-set -euo pipefail
-
-echo "[firepi] Installing host dependencies (NetworkManager, Avahi, ALSA)…"
-export DEBIAN_FRONTEND=noninteractive
+echo "[firepi] Installing host deps (NetworkManager, Avahi, ALSA, jq)…"
+export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}
 apt-get update -y
 apt-get install -y --no-install-recommends network-manager avahi-daemon alsa-utils jq
 
@@ -463,95 +276,145 @@ systemctl enable --now avahi-daemon.service || true
 echo "[firepi] Writing helper scripts…"
 install -d -m 0755 /usr/local/bin /usr/local/share/firepi /var/lib/firepi
 
-# firepi-softap.sh: explicit AP profile (WPA2-PSK/CCMP, PMF off, 2.4 GHz ch 6)
+# --- /usr/local/bin/firepi-softap.sh ---
 cat > /usr/local/bin/firepi-softap.sh <<'EOF_SOFTAP'
 #!/usr/bin/env bash
 set -e -o pipefail
-AP_SSID="FirePi-$(awk -F': ' '/Serial/ { s=$2 } END{ print substr(s, length(s)-3) }' /proc/cpuinfo)"
+# Determine Wi‑Fi interface first (needed for MAC)
+IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
+
+# Serial suffix for SSID
+SER=$(awk -F': ' '/Serial/ { print $2 }' /proc/cpuinfo)
+SER_SUFFIX="${SER: -4}"
+if [[ -z "$SER_SUFFIX" ]]; then SER_SUFFIX="0000"; fi
+
+# Deterministic PSK from MAC last 6 hex chars (no colons, uppercased)
+MAC=$(cat "/sys/class/net/${IFACE}/address" 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]')
+if [[ -n "$MAC" ]]; then
+  MAC_SUFFIX="${MAC: -6}"
+else
+  # Fallback: last 6 of CPU serial if MAC unavailable
+  TMP="${SER: -6}"
+  MAC_SUFFIX="$(printf '%06s' "$TMP" | tr ' ' '0' | tr '[:lower:]' '[:upper:]')"
+fi
+# Ensure 6 chars (pad if oddly short)
+if [[ ${#MAC_SUFFIX} -lt 6 ]]; then
+  MAC_SUFFIX="$(printf '%06s' "$MAC_SUFFIX" | tr ' ' '0')"
+fi
+
+AP_SSID="FirePi-${SER_SUFFIX}-${MAC_SUFFIX}"
+AP_PSK="FirePi${MAC_SUFFIX}"
+
+# Persist PSK for UI banner / reuse
 AP_PSK_FILE="/var/lib/firepi/ap_psk"
 mkdir -p "$(dirname "$AP_PSK_FILE")"
-if [[ ! -s "$AP_PSK_FILE" ]]; then
-  head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 12 > "$AP_PSK_FILE"
-fi
-AP_PSK="$(cat "$AP_PSK_FILE")"
-IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
+printf '%s\n' "$AP_PSK" > "$AP_PSK_FILE"
+
 case "${1:-}" in
   start)
     DURATION="${2:-30min}"
+    # Clean any old hotspot profiles
     nmcli con down Hotspot 2>/dev/null || true
     nmcli con delete Hotspot 2>/dev/null || true
     nmcli con down FirePiAP 2>/dev/null || true
     nmcli con delete FirePiAP 2>/dev/null || true
+
     nmcli con add type wifi ifname "$IFACE" con-name FirePiAP autoconnect no ssid "$AP_SSID"
-    nmcli con modify FirePiAP       802-11-wireless.mode ap       802-11-wireless.band bg       802-11-wireless.channel 6       ipv4.method shared       ipv6.method ignore       wifi-sec.key-mgmt wpa-psk       wifi-sec.psk "$AP_PSK"       wifi-sec.group ccmp       wifi-sec.pairwise ccmp       wifi-sec.pmf disable
+    nmcli con modify FirePiAP \
+      802-11-wireless.mode ap \
+      802-11-wireless.band bg \
+      802-11-wireless.channel 6 \
+      ipv4.method shared \
+      ipv6.method ignore \
+      wifi-sec.key-mgmt wpa-psk \
+      wifi-sec.psk "$AP_PSK" \
+      wifi-sec.group ccmp \
+      wifi-sec.pairwise ccmp \
+      wifi-sec.pmf disable
+
     nmcli con up FirePiAP
-    echo "SoftAP up: SSID=$AP_SSID (PSK in $AP_PSK_FILE) window $DURATION"
-    echo "Open http://10.42.0.1 or http://firepi.local"
+
+    echo "SoftAP up: SSID=$AP_SSID  PSK=$(cat "$AP_PSK_FILE")"
+    echo "Open http://10.42.0.1 or http://firepi.local to configure."
+
+    # Auto-stop after the window using a oneshot
     systemd-run --unit firepi-softap-timer --on-active="$DURATION" --property=Type=oneshot /usr/local/bin/firepi-softap.sh stop >/dev/null 2>&1 || true
     ;;
   stop)
     nmcli con down FirePiAP 2>/dev/null || true
     nmcli con delete FirePiAP 2>/dev/null || true
     systemctl stop firepi-softap-timer.service >/dev/null 2>&1 || true
-    echo "SoftAP stopped."
     ;;
-  *) echo "usage: $0 {start [duration]|stop}"; exit 2;;
+  *)
+    echo "usage: $0 {start [duration]|stop}" ; exit 2 ;;
 esac
 EOF_SOFTAP
 chmod 0755 /usr/local/bin/firepi-softap.sh
 
-# firepi-wifi-online.sh: start AP on boot if STA not connected; play WAV
+# --- /usr/local/bin/firepi-wifi-online.sh ---
 cat > /usr/local/bin/firepi-wifi-online.sh <<'EOF_ONLINE'
 #!/usr/bin/env bash
 set -e -o pipefail
+# On boot: if not connected to STA within ~12s, start SoftAP for 30 min and play onboarding WAV.
 sleep 4
 nmcli device wifi rescan >/dev/null 2>&1 || true
 for i in {1..6}; do
   STATE="$(nmcli -t -f STATE g 2>/dev/null || true)"
-  if [[ "$STATE" == "connected" ]]; then exit 0; fi
+  if [[ "$STATE" == "connected" ]]; then
+    exit 0
+  fi
   sleep 2
 done
 systemctl start firepi-softap@30min.service || true
 WAV="${FIREPI_ONBOARD_WAV:-/usr/local/share/firepi/onboarding.wav}"
-if [[ -f "$WAV" ]]; then aplay -q "$WAV" >/dev/null 2>&1 || true; fi
+if [[ -f "$WAV" ]]; then
+  aplay -q "$WAV" >/dev/null 2>&1 || true
+fi
 EOF_ONLINE
 chmod 0755 /usr/local/bin/firepi-wifi-online.sh
 
-# firepi-wifi-switch.sh: attempt STA connect; rollback to AP on failure
+# --- /usr/local/bin/firepi-wifi-switch.sh ---
 cat > /usr/local/bin/firepi-wifi-switch.sh <<'EOF_SWITCH'
 #!/usr/bin/env bash
 set -e -o pipefail
-PENDING="/var/lib/firepi/pending_wifi.json"
+# Read pending creds, try STA connect in background; on failure, re-enable AP for 30 min.
+PENDING="${FIREPI_PENDING_WIFI}"
 IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
+
 if [[ ! -f "$PENDING" ]]; then
-  echo "pending wifi not found"; exit 2
+  logger -t firepi "pending wifi not found"
+  exit 2
 fi
 SSID=$(jq -r .ssid "$PENDING" 2>/dev/null || echo "")
-PSK=$(jq -r .psk "$PENDING" 2>/dev/null || echo "")
-# Bring AP down
+PSK=$(jq -r .psk  "$PENDING" 2>/dev/null || echo "")
+logger -t firepi "Switching WiFi to SSID='${SSID}'"
+
+# Bring AP down before attempting STA
 nmcli con down FirePiAP 2>/dev/null || true
 nmcli con delete FirePiAP 2>/dev/null || true
 nmcli con down Hotspot 2>/dev/null || true
 nmcli con delete Hotspot 2>/dev/null || true
 
-# Try connect
+# Attempt connect (with/without PSK)
 if [[ -n "$PSK" && "$PSK" != "null" ]]; then
   nmcli dev wifi connect "$SSID" password "$PSK" ifname "$IFACE" || true
 else
   nmcli dev wifi connect "$SSID" ifname "$IFACE" || true
 fi
 
-# Wait for connected + a non-AP IP
+# Wait up to ~30s for a non-AP IP
 for i in {1..30}; do
   STATE="$(nmcli -t -f STATE g 2>/dev/null || true)"
   IP=$(nmcli -t -f IP4.ADDRESS dev show "$IFACE" 2>/dev/null | awk -F: 'NR==1{print $2}')
   if [[ "$STATE" == "connected" && -n "$IP" && "$IP" != 10.42.* ]]; then
+    logger -t firepi "WiFi switch success: ${SSID} ${IP}"
     exit 0
   fi
   sleep 1
 done
 
 # Failed: re-enable AP window
+logger -t firepi "WiFi switch failed; re-enabling AP"
 /usr/local/bin/firepi-softap.sh start 30min || true
 exit 1
 EOF_SWITCH
@@ -576,7 +439,7 @@ EOF_UNIT_AP
 
 cat > /etc/systemd/system/firepi-wifi-online.service <<'EOF_UNIT_ONLINE'
 [Unit]
-Description=FirePi Wi‑Fi bring-up (open AP if not connected)
+Description=FirePi WiFi bring-up (open AP if not connected)
 After=network.target NetworkManager.service
 Wants=NetworkManager.service
 
@@ -588,19 +451,218 @@ ExecStart=/usr/local/bin/firepi-wifi-online.sh
 WantedBy=multi-user.target
 EOF_UNIT_ONLINE
 
-echo "[firepi] Copying onboarding WAV…"
-SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+echo "[firepi] Copying onboarding WAV (if present)…"
+SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
 install -d -m 0755 /usr/local/share/firepi
 if [[ -f "${SCRIPT_DIR}/audio/stock/ready_to_connect.wav" ]]; then
   install -m 0644 "${SCRIPT_DIR}/audio/stock/ready_to_connect.wav" /usr/local/share/firepi/onboarding.wav
-  echo "  + /usr/local/share/firepi/onboarding.wav installed"
+  echo "  + /usr/local/share/firepi/onboarding.wav"
 else
-  echo "  (onboarding WAV not found at ${SCRIPT_DIR}/audio/stock/ready_to_connect.wav; skipping copy)"
+  echo "  (onboarding WAV not found at ${SCRIPT_DIR}/audio/stock/ready_to_connect.wav)"
 fi
 
 echo "[firepi] Enabling services…"
 systemctl daemon-reload
 systemctl enable --now firepi-wifi-online.service
 
-echo "[firepi] Done."
+# === Final: compute and print SSID/PSK now, and save to a file ===
+IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
+SER=$(awk -F': ' '/Serial/ { print $2 }' /proc/cpuinfo)
+SER_SUFFIX="${SER: -4}"; [[ -z "$SER_SUFFIX" ]] && SER_SUFFIX="0000"
+MAC=$(cat "/sys/class/net/${IFACE}/address" 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]')
+if [[ -n "$MAC" ]]; then MAC_SUFFIX="${MAC: -6}"; else TMP="${SER: -6}"; MAC_SUFFIX="$(printf '%06s' "$TMP" | tr ' ' '0' | tr '[:lower:]' '[:upper:]')"; fi
+if [[ ${#MAC_SUFFIX} -lt 6 ]]; then MAC_SUFFIX="$(printf '%06s' "$MAC_SUFFIX" | tr ' ' '0')"; fi
+AP_SSID="FirePi-${SER_SUFFIX}-${MAC_SUFFIX}"
+AP_PSK="FirePi${MAC_SUFFIX}"
+INFO_FILE="/var/lib/firepi/onboarding_info.txt"
+printf 'SSID: %s\nPSK : %s\n' "$AP_SSID" "$AP_PSK" | tee "$INFO_FILE"
 
+# Optionally open an immediate AP window by exporting FIREPI_START_SOFTAP=<duration>
+if [[ -n "${FIREPI_START_SOFTAP:-}" ]]; then
+  systemctl start "firepi-softap@${FIREPI_START_SOFTAP}.service" || true
+fi
+
+
+# === FirePi WiFi APP_HOME scripts integration (2025-09-30) ===
+# This block preserves your existing setup and ADDs integration for APP_HOME-based Wi‑Fi scripts.
+# It does NOT copy any scripts to /usr/local/bin. All systemd units call scripts under $APP_HOME/wifi_scripts.
+
+# --- Resolve APP_HOME ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+APP_HOME="${APP_HOME:-$SCRIPT_DIR}"
+echo "[firepi] Using APP_HOME=${APP_HOME}"
+
+# --- Ensure prerequisites (idempotent) ---
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -y
+  sudo apt-get install -y --no-install-recommends network-manager avahi-daemon alsa-utils jq
+fi
+sudo systemctl enable --now NetworkManager.service
+sudo systemctl enable --now avahi-daemon.service || true
+
+# --- Ensure instance dir ---
+mkdir -p "${APP_HOME}/instance"
+chmod 0755 "${APP_HOME}/instance"
+
+# --- Verify staged scripts exist under APP_HOME/wifi_scripts and are executable ---
+for f in firepi-softap.sh firepi-wifi-online.sh firepi-wifi-switch.sh; do
+  if [[ ! -f "${APP_HOME}/wifi_scripts/${f}" ]]; then
+    echo "[firepi] ERROR: Missing ${APP_HOME}/wifi_scripts/${f}. Please add it to the repo."
+    exit 2
+  fi
+  chmod 0755 "${APP_HOME}/wifi_scripts/${f}"
+done
+
+# --- Write systemd units that reference APP_HOME paths ---
+SOFTAP_UNIT="/etc/systemd/system/firepi-softap@.service"
+WIFI_ONLINE_UNIT="/etc/systemd/system/firepi-wifi-online.service"
+WIFI_SWITCH_UNIT="/etc/systemd/system/firepi-wifi-switch@.service"
+
+sudo bash -c "cat > '${SOFTAP_UNIT}'" <<'EOF_SOFTAP_UNIT'
+[Unit]
+Description=FirePi SoftAP window (%i)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=APP_HOME=@APP_HOME@
+WorkingDirectory=@APP_HOME@
+ExecStart=@APP_HOME@/wifi_scripts/firepi-softap.sh start %i
+ExecStop=@APP_HOME@/wifi_scripts/firepi-softap.sh stop
+
+[Install]
+WantedBy=multi-user.target
+EOF_SOFTAP_UNIT
+
+sudo bash -c "cat > '${WIFI_ONLINE_UNIT}'" <<'EOF_ONLINE_UNIT'
+[Unit]
+Description=FirePi WiFi bring-up (open AP if not connected)
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+Environment=APP_HOME=@APP_HOME@
+WorkingDirectory=@APP_HOME@
+ExecStart=@APP_HOME@/wifi_scripts/firepi-wifi-online.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF_ONLINE_UNIT
+
+sudo bash -c "cat > '${WIFI_SWITCH_UNIT}'" <<'EOF_SWITCH_UNIT'
+[Unit]
+Description=FirePi WiFi switch with pending file (%i)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+Environment=APP_HOME=@APP_HOME@
+Environment=FIREPI_PENDING_WIFI=%i
+WorkingDirectory=@APP_HOME@
+ExecStart=@APP_HOME@/wifi_scripts/firepi-wifi-switch.sh
+EOF_SWITCH_UNIT
+
+# Replace @APP_HOME@ placeholders with actual path
+sudo sed -i "s|@APP_HOME@|${APP_HOME}|g" "${SOFTAP_UNIT}" "${WIFI_ONLINE_UNIT}" "${WIFI_SWITCH_UNIT}"
+
+# --- Copy onboarding audio into instance (optional) ---
+if [[ -f "${APP_HOME}/audio/stock/ready_to_connect.wav" ]]; then
+  install -m 0644 "${APP_HOME}/audio/stock/ready_to_connect.wav" "${APP_HOME}/instance/onboarding.wav"
+fi
+
+# --- Reload units & enable on-boot check ---
+sudo systemctl daemon-reload
+sudo systemctl enable --now firepi-wifi-online.service
+
+# --- Print deterministic SSID/PSK to console and save to instance ---
+IFACE=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}'); [[ -z "$IFACE" ]] && IFACE=wlan0
+SER=$(awk -F': ' '/Serial/ { print $2 }' /proc/cpuinfo)
+SER_SUFFIX="${SER: -4}"; [[ -z "$SER_SUFFIX" ]] && SER_SUFFIX="0000"
+MAC=$(cat "/sys/class/net/${IFACE}/address" 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]')
+if [[ -n "$MAC" ]]; then MAC_SUFFIX="${MAC: -6}"; else TMP="${SER: -6}"; MAC_SUFFIX="$(printf '%06s' "$TMP" | tr ' ' '0' | tr '[:lower:]' '[:upper:]')"; fi
+if [[ ${#MAC_SUFFIX} -lt 6 ]]; then MAC_SUFFIX="$(printf '%06s' "$MAC_SUFFIX" | tr ' ' '0')"; fi
+AP_SSID="FirePi-${SER_SUFFIX}-${MAC_SUFFIX}"
+AP_PSK="FirePi${MAC_SUFFIX}"
+printf 'SSID: %s\nPSK : %s\n' "$AP_SSID" "$AP_PSK" | tee "${APP_HOME}/instance/onboarding_info.txt"
+
+# ---------- final notes ----------
+echo
+echo "=============================================================="
+echo "SETUP COMPLETE. A reboot is recommended for I²S overlay to apply."
+echo "=============================================================="
+echo
+echo "Next steps:"
+echo "  1) Reboot now:"
+echo "       sudo reboot"
+echo
+echo "  2) After reboot, verify audio device and service:"
+echo "       aplay -l"
+echo "       cat /etc/asound.conf"
+echo "       systemctl status ${SERVICE_NAME}.service"
+echo "       journalctl -u ${SERVICE_NAME}.service -b --no-pager"
+echo
+echo "  3) Audio test (use a wav):"
+echo "       aplay /path/to/sound.wav"
+echo
+echo "  4) Open the app:"
+echo "       ${SELF_URL_HOST}"
+echo "       ${SELF_URL_IP}"
+echo
+echo "On-board AP:"
+echo "   SSID: ${AP_SSID}"
+echo "   PSK:  ${AP_PSK}"
+echo
+
+# === FirePi WiFi switch path/service (2025-09-30) ===
+# Adds a root-run service and a path watcher so the non-root app only writes
+# $APP_HOME/instance/pending_wifi.json and systemd triggers the privileged switch.
+
+# Resolve APP_HOME (defaults to this script's dir).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+APP_HOME="${APP_HOME:-$SCRIPT_DIR}"
+
+SWITCH_SVC="/etc/systemd/system/firepi-wifi-switch.service"
+SWITCH_PATH="/etc/systemd/system/firepi-wifi-switch.path"
+
+# Service: executes the switch script as root
+sudo bash -c "cat > '${SWITCH_SVC}'" <<'EOF_SVC'
+[Unit]
+Description=FirePi WiFi switch (reads pending creds)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+Environment=APP_HOME=@APP_HOME@
+Environment=FIREPI_PENDING_WIFI=@APP_HOME@/instance/pending_wifi.json
+WorkingDirectory=@APP_HOME@
+ExecStart=@APP_HOME@/wifi_scripts/firepi-wifi-switch.sh
+EOF_SVC
+
+# Path: triggers the service when the pending file is created/modified
+sudo bash -c "cat > '${SWITCH_PATH}'" <<'EOF_PATH'
+[Unit]
+Description=Watch pending WiFi credentials and trigger switch
+
+[Path]
+PathChanged=@APP_HOME@/instance/pending_wifi.json
+PathModified=@APP_HOME@/instance/pending_wifi.json
+
+[Install]
+WantedBy=multi-user.target
+EOF_PATH
+
+# Replace placeholders with actual APP_HOME
+sudo sed -i "s|@APP_HOME@|${APP_HOME}|g" "${SWITCH_SVC}" "${SWITCH_PATH}"
+
+# Ensure instance dir exists for pending file and logs
+mkdir -p "${APP_HOME}/instance"
+
+# Reload and enable the path watcher
+sudo systemctl daemon-reload
+sudo systemctl enable --now firepi-wifi-switch.path

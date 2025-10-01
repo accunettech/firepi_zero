@@ -12,6 +12,7 @@ from services.audio import (
     delete_audio,
 )
 from services import admin_ops
+from services import wifi_nm
 
 bp = Blueprint("config_ui", __name__)
 
@@ -608,30 +609,41 @@ def admin_support_ping_remote():
 # ---------- Wi-Fi API ----------
 @bp.get("/api/wifi/status")
 def api_wifi_status():
-    from services.wifi_nm import status
-    return jsonify(status())
+    try:
+        data = wifi_nm.status()
+        data.setdefault("status", "ok")
+        return jsonify(data), 200
+    except Exception as e:
+        current_app.logger.exception("api_wifi_status failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 
 @bp.get("/api/wifi/scan")
 def api_wifi_scan():
-    from services.wifi_nm import scan
     try:
-        nets = scan()
-        return jsonify({"networks": nets})
+        data = wifi_nm.scan()
+        # Keep both keys for legacy UI compatibility
+        if "results" not in data:
+            data["results"] = data.get("networks", [])
+        data.setdefault("status", "ok")
+        return jsonify(data), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        current_app.logger.exception("api_wifi_scan failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 
 @bp.post("/api/wifi/connect")
 def api_wifi_connect():
-    data = request.get_json(force=True) or {}
-    ssid = (data.get("ssid") or "").strip()
-    psk  = (data.get("psk") or "").strip()
-    from services.wifi_nm import connect
     try:
-        resp = connect(ssid, psk, wait_s=20)
-        code = 200 if resp.get("status") == "ok" else 400
-        return jsonify(resp), code
+        body = request.get_json(silent=True) or {}
+        ssid = (body.get("ssid") or "").strip()
+        psk  = (body.get("psk") or "").strip()
+        out = wifi_nm.connect(ssid, psk)
+        out.setdefault("status", "ok")
+        return jsonify(out), 200
     except Exception as e:
-        return jsonify({"status":"error","error":str(e)}), 400
+        current_app.logger.exception("api_wifi_connect failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 @bp.post("/api/wifi/forget")
 def api_wifi_forget():

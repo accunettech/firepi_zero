@@ -53,21 +53,55 @@
     try {
       showProgress('Connecting', 'Applying Wi‑Fi credentials…');
     } catch(e){}
+    const controller = new AbortController();
+    const handoffTimer = setTimeout(() => controller.abort(), 2500);
+    let started = false;
     try {
-      const r = await apiPost('/api/wifi/connect', { ssid, psk });
-      if (r.status === 'ok') {
-        toast('Connected. AP will close if active.');
-      } else {
-        toast(r.error || 'Connect failed');
-      }
+      const res = await fetch('/api/wifi/connect', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ ssid, psk }),
+        signal: controller.signal
+      });
+      started = res.ok; // but we don’t actually require a response
     } catch (e) {
-      toast('Connect failed');
+      // Network error here is EXPECTED if AP drops mid-request.
+      // Do NOT treat as failure.
+      started = true
     } finally {
-      try { hideProgress(); } catch(e){}
-      btn.disabled = false; btn.innerHTML = html;
-      setTimeout(refreshStatus, 1500);
+      clearTimeout(handoffTimer);
+    }
+    hideProgress();
+    toast('Switching networks… If this page stops responding, reconnect to your usual Wi-Fi. I’ll try to find the device automatically.', 'info');
+
+    if (started) {
+      toast('Switching networks… if this page stops responding, reconnect to your Wi-Fi. I’ll try to find the device.', 'info');
+      probeAndRedirect();
+    } else {
+      toast('Failed to start Wi-Fi switch. Check service logs.', 'danger');
     }
   }
+
+  async function probeAndRedirect() {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const targets = [window.location.origin, 'http://firepi.local'];
+  const deadline = Date.now() + 60_000;
+
+  await sleep(8000); // let it associate + DHCP
+
+  while (Date.now() < deadline) {
+    for (const base of targets) {
+      try {
+        const r = await fetch(`${base}/api/health`, { cache: 'no-store' });
+        if (r.ok) { window.location.href = `${base}/admin`; return; }
+      } catch (_) { /* keep trying */ }
+    }
+    await sleep(3000);
+  }
+  toast('If this page is unresponsive, connect to your Wi-Fi and open http://firepi.local/admin', 'warning');
+}
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   async function forget() {
     const ssid = (document.getElementById('wifiSsid')?.value || '').trim();
