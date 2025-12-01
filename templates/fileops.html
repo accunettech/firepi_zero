@@ -1,0 +1,266 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>FileOps</title>
+  <style>
+    :root { --bg:#0b0e12; --fg:#e6eef7; --muted:#8aa1b2; --accent:#5cc8ff; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#0a0c10; color:#e6eef7; margin: 24px; }
+    h2 { margin: 18px 0 10px; }
+    .card { background: #0f141b; border: 1px solid #1c2733; border-radius: 10px; padding: 14px; margin-bottom: 18px; }
+    .row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; }
+    .btn { background:#17212b; border:1px solid #263445; padding:6px 10px; border-radius:8px; color:#e6eef7; cursor:pointer; }
+    .btn:hover { background:#1b2733; }
+    input[type="file"] { color:#e6eef7; }
+    ul { list-style: none; padding-left: 0; margin: 8px 0 0; }
+    li { display:flex; align-items:center; justify-content:space-between; border-bottom:1px dashed #203040; padding:6px 0; gap: 10px; }
+    .file-actions a, .file-actions button { margin-left: 8px; }
+    .muted { color: var(--muted); }
+    .kbd { background:#1b2633; border:1px solid #2b3a4d; border-bottom-width:2px; padding: 2px 6px; border-radius: 6px; }
+    /* Terminal */
+    #term { background:#000; color:#b8f4b8; border:1px solid #1b1b1b; border-radius:10px; padding:10px; height:380px; overflow:auto; white-space:pre-wrap; }
+    #cmdline-wrap { display:flex; align-items:center; gap:8px; padding-top:8px; }
+    #prompt { color:#89f; }
+    #cmd { flex:1; background:#0b0b0b; color:#e6eef7; border:1px solid #2a2a2a; border-radius:6px; padding:6px 8px; }
+    .err { color:#ff9c9c; }
+    .ok  { color:#9cffbf; }
+    .dim { color:#8a8a8a; }
+    .grow { flex: 1; }
+    a { color: var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .pill { background:#14202b; border:1px solid #1f2f40; border-radius:999px; padding:2px 8px; font-size:12px; }
+  </style>
+</head>
+<body>
+
+  <div class="row">
+    <!-- Left: Files & Upload -->
+    <div class="card">
+      <h2>Uploads</h2>
+      <div>
+        <input type="file" id="file" />
+        <button class="btn" id="uploadBtn">Upload</button>
+      </div>
+
+      <div style="margin-top:10px;">
+        <span class="muted">Directory:</span> <span class="pill">instance/uploads</span>
+      </div>
+
+      <h3 style="margin-top:14px; display:flex; align-items:center; gap:10px;">
+        <span>Files</span>
+        <button class="btn" id="downloadSelectedBtn" disabled>Download Selected</button>
+        <button class="btn" id="deleteSelectedBtn" disabled>Delete Selected</button>
+      </h3>
+      <ul id="files"></ul>
+      <div class="muted" id="emptyHint" style="display:none;">(empty)</div>
+    </div>
+
+    <!-- Right: Pseudo-terminal -->
+    <div class="card">
+      <h2>Console</h2>
+      <div id="term" aria-live="polite"></div>
+      <div id="cmdline-wrap">
+        <span id="prompt"></span>
+        <input id="cmd" type="text" autocomplete="off" placeholder="type a command and press Enter (try: ls, pwd, cd subdir)" />
+        <button class="btn" id="runBtn">Run</button>
+      </div>
+      <div class="muted" style="margin-top:6px;">
+        Commands run in a per-session working directory clamped inside <span class="kbd">instance/uploads</span>. Built-ins: <span class="kbd">cd</span>, <span class="kbd">pwd</span>.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+    let selectedFile = null;
+    const downloadSelectedBtn = $("#downloadSelectedBtn");
+    const deleteSelectedBtn = $("#deleteSelectedBtn");
+    const filesUl = $("#files");
+    const emptyHint = $("#emptyHint");
+    const term = $("#term");
+    const promptEl = $("#prompt");
+    const cmdInput = $("#cmd");
+    const uploadBtn = $("#uploadBtn");
+    const runBtn = $("#runBtn");
+
+    function appendToTerm(text, cls) {
+      const span = document.createElement("div");
+      if (cls) span.className = cls;
+      span.textContent = text;
+      term.appendChild(span);
+      term.scrollTop = term.scrollHeight;
+    }
+
+    function showPrompt(prompt) {
+      promptEl.textContent = prompt;
+    }
+
+    async function refreshState() {
+      const res = await fetch("/fileops/state");
+      const data = await res.json();
+      showPrompt(data.prompt);
+      return data;
+    }
+
+    async function refreshFiles() {
+        const res = await fetch("/fileops/files");
+        const data = await res.json();
+        filesUl.innerHTML = "";
+        const files = data.files || [];
+        if (files.length === 0) {
+            emptyHint.style.display = "block";
+            selectedFile = null;
+            downloadSelectedBtn.disabled = true;
+            deleteSelectedBtn.disabled = true;
+        } else {
+            emptyHint.style.display = "none";
+        }
+
+        files.forEach(f => {
+            const li = document.createElement("li");
+            const left = document.createElement("div");
+            const right = document.createElement("div");
+            right.className = "file-actions";
+
+            // NEW: radio select
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "file-select";
+            radio.style.marginRight = "8px";
+            radio.addEventListener("change", () => {
+            selectedFile = f.name;
+            downloadSelectedBtn.disabled = !selectedFile;
+            deleteSelectedBtn.disabled = !selectedFile;
+            });
+            left.appendChild(radio);
+
+            left.appendChild(document.createTextNode(f.name + " "));
+            const sz = document.createElement("span");
+            sz.className = "muted";
+            sz.textContent = `(${f.size} bytes)`;
+            left.appendChild(sz);
+
+            // (Optional) keep per-item Download link if you want both options:
+            const dl = document.createElement("a");
+            dl.href = "/fileops/download/" + encodeURIComponent(f.name);
+            dl.textContent = "Download";
+
+            const del = document.createElement("button");
+            del.className = "btn";
+            del.textContent = "Delete";
+            del.onclick = async () => {
+            await fetch("/fileops/delete", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name: f.name})
+            });
+            // clear selection if we just deleted it
+            if (selectedFile === f.name) {
+                selectedFile = null;
+                downloadSelectedBtn.disabled = true;
+            }
+            await refreshFiles();
+            };
+
+            right.appendChild(dl);   // remove this line if you only want the top button
+            right.appendChild(del);
+
+            li.appendChild(left);
+            li.appendChild(right);
+            filesUl.appendChild(li);
+        });
+    }
+
+    async function uploadFile() {
+      const input = $("#file");
+      const file = input.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/fileops/upload", {method: "POST", body: fd});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        appendToTerm(`upload: ${err.error || res.statusText}`, "err");
+      } else {
+        appendToTerm(`upload: ${file.name} OK`, "ok");
+        input.value = "";
+        await refreshFiles();
+      }
+    }
+
+    async function runCommand() {
+      const cmd = cmdInput.value.trim();
+      if (!cmd) return;
+      // snapshot current prompt
+      const currentPrompt = promptEl.textContent || ">";
+
+      // echo command with prompt
+      appendToTerm(`${currentPrompt} ${cmd}`, "dim");
+
+      // send to server
+      const res = await fetch("/fileops/run", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cmd})
+      });
+
+      const data = await res.json().catch(() => ({ok:false, output:"(invalid response)", rc:1}));
+
+      // print output (stdout+stderr combined from server)
+      if (data.output) appendToTerm(data.output.replace(/\r\n/g, "\n"));
+
+      // update prompt (and maybe file list if cwd changed)
+      if (data.prompt) showPrompt(data.prompt);
+      cmdInput.value = "";
+
+      // quality-of-life: if command touched files, you’ll see it with a quick refresh on common commands
+      if (/^(mv|cp|rm|touch|echo|tar|unzip|zip|sed|awk|truncate|dd|>|\<)/.test(cmd) || cmd.startsWith("cd") || cmd.startsWith("mkdir") || cmd.startsWith("rmdir")) {
+        refreshFiles();
+      }
+    }
+
+    // events
+    uploadBtn.addEventListener("click", uploadFile);
+    runBtn.addEventListener("click", runCommand);
+    downloadSelectedBtn.addEventListener("click", () => {
+      if (!selectedFile) return;
+      window.location.href = "/fileops/download/" + encodeURIComponent(selectedFile);
+    });
+    deleteSelectedBtn.addEventListener("click", async () => {
+        if (!selectedFile) return;
+        const res = await fetch("/fileops/delete", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ name: selectedFile })
+        });
+        if (res.ok) {
+            try { appendToTerm(`delete: ${selectedFile} OK`, "ok"); } catch {}
+            selectedFile = null;
+            downloadSelectedBtn.disabled = true;
+            deleteSelectedBtn.disabled = true;
+            await refreshFiles();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            try { appendToTerm(`delete: ${err.error || "failed"}`, "err"); } catch {}
+        }
+    });
+
+    cmdInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runCommand();
+      }
+    });
+    term.addEventListener("click", () => cmdInput.focus());
+
+    // boot
+    (async function init() {
+      await refreshFiles();
+      const st = await refreshState();
+      appendToTerm(`Session started. Working directory: ${st.cwd}`, "dim");
+      appendToTerm(`Type "pwd", "ls", "cd <subdir>", etc.`, "dim");
+      cmdInput.focus();
+    })();
+  </script>
+</body>
+</html>

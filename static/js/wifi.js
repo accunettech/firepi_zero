@@ -6,11 +6,19 @@
       const ip   = document.getElementById('wifiStatusIp');
       if (pill) {
         let cls = 'bg-secondary-subtle text-secondary-emphasis';
-        let txt = (j.state || 'unknown').toUpperCase();
-        if (j.state === 'connected') cls = 'bg-success-subtle text-success-emphasis';
-        else if (j.state?.includes('connecting')) cls = 'bg-warning-subtle text-warning-emphasis';
-        pill.className = 'badge rounded-pill px-3 py-2 ' + cls;
-        pill.textContent = txt;
+let txt = (j.state || 'unknown').toUpperCase();
+if (j.state === 'connected') {
+  cls = 'bg-success-subtle text-success-emphasis';
+  if (j.mode === 'ap' && j.ssid) {
+    txt = `AP MODE: ${j.ssid}`;
+  } else if (j.ssid) {
+    txt = `CONNECTED to ${j.ssid}`;
+  }
+} else if (j.state?.includes('connecting')) {
+  cls = 'bg-warning-subtle text-warning-emphasis';
+}
+pill.className = 'badge rounded-pill px-3 py-2 ' + cls;
+pill.textContent = txt;
       }
       if (ip) ip.textContent = j.ip || '—';
     } catch (_) {}
@@ -98,7 +106,7 @@
     }
     await sleep(3000);
   }
-  toast('If this page is unresponsive, connect to your Wi-Fi and open http://firepi.local/admin', 'warning');
+  toast('If this page is unresponsive, connect to your Wi-Fi and open http://firepi/admin', 'warning');
 }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

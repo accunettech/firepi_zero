@@ -17,8 +17,8 @@
           <button id="btnSnapshot" class="btn btn-outline-light btn-sm" type="button" title="Grab new snapshot"><i class="bi bi-camera me-1"></i>Snapshot</button>
           <button id="btnSaveRois" class="btn btn-primary btn-sm" type="button" title="Save ROI YAML"><i class="bi bi-save me-1"></i>Save ROIs</button>
           <button id="btnReloadWorker" class="btn btn-outline-light btn-sm" type="button" title="Reload ROI config in background worker"><i class="bi bi-arrow-repeat me-1"></i>Reload</button>
-          <button class="btn btn-outline-light btn-sm" id="btnSnapshot">
-            <i class="bi bi-camera me-1"></i>Snapshot
+          <button class="btn btn-outline-light btn-sm" id="btnClearRois">
+            <i class="bi bi-eraser-fill me-1"></i>Clear ROIs
           </button>
         </div>
       </div>
@@ -97,42 +97,49 @@
           <small class="text-muted">Decoded values using current ROIs & thresholds.</small>
         </div>
       </div>
-      <div class="card-body">
-        <div class="row g-4">
-          <div class="col-12 col-lg-6">
-            <div class="mb-3">
-              <div class="fw-semibold mb-2">Digital Displays</div>
-              <div id="testLcd1" class="sevenseg-group"></div>
-              <div id="testLcd2" class="sevenseg-group mt-2"></div>
-              <div id="testLcd3" class="sevenseg-group mt-2"></div>
-              <div id="testLcd4" class="sevenseg-group mt-2"></div>
-            </div>
-            <div>
-              <div class="fw-semibold mb-2">Status LEDs</div>
-              <ul class="list-group list-group-flush led-stack">
-                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                  <span class="fw-semibold">OPR CTRL</span><span class="led-dot" id="test-led-opr_ctrl"></span>
-                </li>
-                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                  <span class="fw-semibold">INTRLCK</span><span class="led-dot" id="test-led-interlck"></span>
-                </li>
-                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                  <span class="fw-semibold">PTFI</span><span class="led-dot" id="test-led-ptfi"></span>
-                </li>
-                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                  <span class="fw-semibold">FLAME</span><span class="led-dot" id="test-led-flame"></span>
-                </li>
-                <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
-                  <span class="fw-semibold">ALARM</span><span class="led-dot" id="test-led-alarm"></span>
-                </li>
-              </ul>
-            </div>
-          </div>
-          <div class="col-12 col-lg-6">
-            <div class="fw-semibold mb-2">Annotated Preview</div>
-            <img id="testPreview" class="img-fluid rounded-3 border border-secondary" alt="Annotated preview">
-            <small class="text-muted d-block mt-2">Boxes are drawn at current ROIs (green=ON, red=OFF for LEDs).</small>
-          </div>
+      <!-- Dry-Run: upload snapshot and decode -->
+      <div class="mt-3" id="dryrun-upload">
+        <label class="form-label">Upload snapshot (JPG/PNG)</label>
+        <input class="form-control" type="file" id="dryRunFile" accept="image/*">
+        <div class="form-text">This loads the image into the canvas above so you can draw ROIs and save them.</div>
+        <div class="mt-2 d-flex gap-2">
+          <button id="btnUseUploaded" class="btn btn-outline-primary btn-sm" disabled>
+            <i class="bi bi-image"></i> Use Uploaded Image in Canvas
+          </button>
+          <button id="btnDryRunDecode" class="btn btn-primary btn-sm" disabled>
+            <i class="bi bi-activity"></i> Run Dry-Run Decode
+          </button>
+        </div>
+      </div>
+      <!-- Dry-Run: panel mimic (LCDs + LEDs) -->
+      <div id="dryRunPanel" class="mt-3">
+        <div class="row g-2">
+          <div class="col-6"><div class="card p-2 text-center">
+            <div class="small text-muted">LCD 1</div>
+            <div id="dry-lcd1" class="display-6 fw-bold font-monospace">----</div>
+          </div></div>
+          <div class="col-6"><div class="card p-2 text-center">
+            <div class="small text-muted">LCD 2</div>
+            <div id="dry-lcd2" class="display-6 fw-bold font-monospace">----</div>
+          </div></div>
+          <div class="col-6"><div class="card p-2 text-center">
+            <div class="small text-muted">LCD 3</div>
+            <div id="dry-lcd3" class="display-6 fw-bold font-monospace">----</div>
+          </div></div>
+          <div class="col-6"><div class="card p-2 text-center">
+            <div class="small text-muted">LCD 4</div>
+            <div id="dry-lcd4" class="display-6 fw-bold font-monospace">----</div>
+          </div></div>
+        </div>
+        <div class="row mt-2 g-2" id="dry-leds">
+          <div class="col-auto"><span class="badge bg-secondary" id="dry-led-opr">OPR</span></div>
+          <div class="col-auto"><span class="badge bg-secondary" id="dry-led-interlck">INTERLCK</span></div>
+          <div class="col-auto"><span class="badge bg-secondary" id="dry-led-ptfi">PTFI</span></div>
+          <div class="col-auto"><span class="badge bg-secondary" id="dry-led-flame">FLAME</span></div>
+          <div class="col-auto"><span class="badge bg-secondary" id="dry-led-alarm">ALARM</span></div>
+        </div>
+        <div class="mt-2">
+          <img id="dryRunPreview" class="img-fluid rounded border d-none" alt="Uploaded snapshot preview">
         </div>
       </div>
     </div>

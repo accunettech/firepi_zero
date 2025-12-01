@@ -1,5 +1,5 @@
-from flask import Blueprint, current_app, render_template, jsonify, request, send_file, url_for, send_from_directory
-import threading
+from flask import Blueprint, current_app, render_template, jsonify, request, send_file, url_for, send_from_directory, Response, stream_with_context, abort
+import threading, time
 from pathlib import Path
 from db import db, Recipient, AlertHistory, alert_history_as_dict, get_or_create_settings
 from services.audio import (
@@ -9,27 +9,68 @@ from services.audio import (
     serve_file,
     get_system_volume,
     set_system_volume,
-    delete_audio,
+    delete_audio
 )
 from services import admin_ops
 from services import wifi_nm
 
 bp = Blueprint("config_ui", __name__)
 
-# ---------- UI ----------
 @bp.route("/")
 def index():
-    return render_template("panel.html")
+    return render_template("panel_snapshot.html")
+
+@bp.route("/panel/calibrate")
+def panel_calibrate_redirect():
+    return render_template("panel_snapshot.html")
 
 @bp.route("/panel")
 def panel_page():
-    return render_template("panel.html")
+    return render_template("panel_snapshot.html")
+
+@bp.route("/snapshot.jpg")
+def snapshot_file():
+    inst = Path(current_app.instance_path)
+    f = inst / "snapshot.jpg"
+    if not f.exists():
+        abort(404)
+    return send_file(str(f), mimetype="image/jpeg", conditional=True, max_age=0)
 
 @bp.route("/config")
 def config_page():
     return render_template("config.html")
 
-# ---------- Recipients API ----------
+@bp.get("/healthz")
+def healthz():
+    return jsonify({"ok": True})
+
+@bp.get("/events")
+def sse_events():
+    sm = current_app.extensions.get("solenoid_monitor")
+    ps = current_app.extensions.get("panel_snapshot")
+
+    initial: list[tuple[str, dict]] = []
+
+    try:
+        initial.append(("health", sm.health() if sm else {"status": "unknown"}))
+    except Exception:
+        initial.append(("health", {"status": "unknown"}))
+
+    try:
+        ver = int(getattr(ps, "_version", 0))
+        initial.append(("snapshot", {"version": ver, "ts": int(time.time())}))
+    except Exception:
+        pass
+
+    gen = current_app.sse_hub.stream(initial=initial)
+
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    return Response(stream_with_context(gen), headers=headers)
+
 @bp.get("/api/recipients")
 def list_recipients():
     recs = Recipient.query.order_by(Recipient.created_at.desc()).all()
@@ -86,7 +127,6 @@ def delete_recipient(rid: int):
     db.session.commit()
     return jsonify({"status": "ok"})
 
-# ---------- Settings API ----------
 @bp.get("/api/settings")
 def get_settings():
     s = get_or_create_settings()
@@ -127,7 +167,6 @@ def update_settings():
     s = get_or_create_settings()
     data = request.get_json(force=True) or {}
 
-    # simple validator for max length 255
     def validate_text(field):
         if field in data and data[field] is not None:
             val = str(data[field]).strip()
@@ -148,7 +187,6 @@ def update_settings():
         elif fld in data:
             setattr(s, fld, None)
 
-    # assign toggles + strings
     for field in [
         "enable_speaker_alert", "enable_phone_alert", "enable_email_alert", "enable_sms_alert",
         "telephony_provider",
@@ -160,14 +198,12 @@ def update_settings():
         if field in data:
             setattr(s, field, (data[field].strip() if isinstance(data[field], str) else data[field]))
 
-    # port: normalize int/null
     if "smtp_port" in data:
         setattr(s, "smtp_port", int(data["smtp_port"]) if data["smtp_port"] not in (None, "",) else None)
 
     db.session.commit()
     return jsonify({"status": "ok"})
 
-# ---------- Health ----------
 @bp.get("/api/health")
 def api_health():
     mon = current_app.extensions.get("solenoid_monitor")
@@ -175,7 +211,6 @@ def api_health():
         return jsonify({"status":"error", "error":"Monitor not initialized"}), 503
     return jsonify(mon.health())
 
-# ---------- History ----------
 @bp.get("/api/history")
 def api_history():
     try:
@@ -187,7 +222,6 @@ def api_history():
     rows = (AlertHistory.query.order_by(AlertHistory.ts.desc()).limit(limit).all())
     return jsonify([alert_history_as_dict(r) for r in rows])
 
-# ---------- Test Notifications ----------
 @bp.get("/api/notifications/test")
 def test_notifications():
     mon = current_app.extensions.get("solenoid_monitor")
@@ -203,7 +237,6 @@ def test_notifications():
 
     return jsonify({"status": "ok"})
 
-# ---------- Audio API ----------
 @bp.get("/api/audio/files")
 def api_audio_files():
     return jsonify(list_audio_files())
@@ -225,7 +258,6 @@ def api_audio_settings_put():
     act = (data.get("solenoid_activated_audio") or "").strip() or None
     deact = (data.get("solenoid_deactivated_audio") or "").strip() or None
 
-    # Validate chosen files exist
     if act and not ensure_exists(act):
         return jsonify({"error": f"File not found: {act}"}), 400
     if deact and not ensure_exists(deact):
@@ -239,8 +271,8 @@ def api_audio_settings_put():
             vol = int(data["volume"])
             if not (0 <= vol <= 100):
                 return jsonify({"error": "volume must be 0-100"}), 400
-            set_system_volume(vol)           # apply to ALSA immediately
-            setattr(s, "audio_volume", vol)  # persist our copy
+            set_system_volume(vol)
+            setattr(s, "audio_volume", vol)
         except Exception as e:
             return jsonify({"error": f"Failed to set system volume: {e}"}), 500
 
@@ -270,233 +302,15 @@ def api_audio_delete():
         return jsonify({"error": err or "delete failed"}), 400
     return jsonify({"status": "ok"})
 
-# Stream audio to the browser
 @bp.get("/audio/<path:filename>")
 def audio_file(filename: str):
     return serve_file(filename)
 
-# --- Panel monitor API ---
-@bp.get("/api/panel/status")
-def api_panel_status():
-    pm = current_app.extensions.get("panel_monitor")
-    if not pm:
-        return jsonify({"status": "error", "error": "Panel monitor not initialized"}), 503
-    return jsonify(pm.latest())
 
-@bp.post("/api/panel/reload")
-def api_panel_reload():
-    pm = current_app.extensions.get("panel_monitor")
-    if not pm:
-        return jsonify({"status": "error", "error": "Panel monitor not initialized"}), 503
-    try:
-        pm.reload_rois()
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        current_app.logger.exception("Panel reload failed")
-        return jsonify({"status": "error", "error": str(e)}), 400
-
-# ---- Calibrate page ----
-@bp.route("/panel/calibrate")
-def panel_calibrate():
-    return render_template("panel_calibrate.html")
-
-# Where to keep the YAML
-def _rois_path():
-    import os
-    p = current_app.config.get(
-        "PANEL_ROIS_PATH",
-        os.path.join(current_app.instance_path, "panel_rois.yaml"),
-    )
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    return p
-
-# Helpers to read/write YAML
-def _read_rois_file():
-    import os, yaml
-    p = _rois_path()
-    if not os.path.exists(p):
-        return {
-            "lcd_rois": {"lcd1":None,"lcd2":None,"lcd3":None,"lcd4":None},
-            "led_rois": {"opr_ctrl":None,"interlck":None,"ptfi":None,"flame":None,"alarm":None},
-            "digit_count_per_lcd": 4,
-            "seg_threshold": 0.55,
-            "lcd_inverted": True,
-            "led_red_thresh": {"sat":110,"val":120},
-        }
-    with open(p, "r") as f:
-        return yaml.safe_load(f) or {}
-
-def _write_rois_file(data):
-    import yaml
-    with open(_rois_path(), "w") as f:
-        yaml.safe_dump(data, f, sort_keys=False)
-
-@bp.get("/api/panel/rois")
-def api_panel_rois_get():
-    return jsonify(_read_rois_file())
-
-@bp.post("/api/panel/rois")
-def api_panel_rois_set():
-    data = request.get_json(force=True) or {}
-    # minimal validation
-    for k in ("lcd_rois", "led_rois"):
-        if k not in data or not isinstance(data[k], dict):
-            return jsonify({"error": f"Missing or invalid {k}"}), 400
-    # write yaml
-    cur = _read_rois_file()
-    cur.update({
-        "lcd_rois": data["lcd_rois"],
-        "led_rois": data["led_rois"],
-        "digit_count_per_lcd": int(data.get("digit_count_per_lcd", 4)),
-        "seg_threshold": float(data.get("seg_threshold", 0.55)),
-        "lcd_inverted": bool(data.get("lcd_inverted", True)),
-        "led_red_thresh": {
-            "sat": int(data.get("led_red_thresh",{}).get("sat",110)),
-            "val": int(data.get("led_red_thresh",{}).get("val",120)),
-        },
-    })
-    _write_rois_file(cur)
-    return jsonify({"status": "ok"})
-
-@bp.get("/api/panel/snapshot")
-def api_panel_snapshot():
-    pm = current_app.extensions.get("panel_monitor")
-    if pm and hasattr(pm, "get_snapshot_jpeg"):
-        jpg = pm.get_snapshot_jpeg()
-        if jpg:
-            resp = current_app.response_class(jpg, mimetype="image/jpeg")
-            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-            return resp
-    return jsonify({"error": "No snapshot available (worker not running)"}), 503
-
-# --- Dry-run decode on an uploaded still photo ---
-@bp.post("/api/panel/debug/decode")
-def api_panel_debug_decode():
-    """
-    Decode an uploaded still photo using the current ROIs/thresholds and
-    return the parsed values plus a JPEG (base64) annotated with boxes.
-    """
-    import base64
-    import numpy as np
-    import cv2
-    from services.panel_monitor import _read_lcd, _led_on
-
-    file = request.files.get("image")
-    if not file:
-        return jsonify({"error": "Missing file field 'image'"}), 400
-
-    # Decode uploaded image -> BGR
-    data = file.read()
-    nparr = np.frombuffer(data, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return jsonify({"error": "Could not decode image"}), 400
-
-    # Load current ROIs/thresholds from disk
-    cfg = _read_rois_file()
-    seg_thr   = float(cfg.get("seg_threshold", 0.55))
-    inverted  = bool(cfg.get("lcd_inverted", True))
-    digits    = int(cfg.get("digit_count_per_lcd", 4))
-    thr_led   = cfg.get("led_red_thresh", {"sat": 110, "val": 120})
-    lcds_cfg  = cfg.get("lcd_rois", {}) or {}
-    leds_cfg  = cfg.get("led_rois", {}) or {}
-
-    # Helper: clamp ROI to image bounds
-    h, w = img.shape[:2]
-    def clamp_roi(roi):
-        if not roi:
-            return None
-        x1 = max(0, min(int(roi.get("x1", 0)), w))
-        y1 = max(0, min(int(roi.get("y1", 0)), h))
-        x2 = max(0, min(int(roi.get("x2", 0)), w))
-        y2 = max(0, min(int(roi.get("y2", 0)), h))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        return (x1, y1, x2, y2)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # ---- Read LCDs
-    lcd_vals = []
-    for key in ("lcd1", "lcd2", "lcd3", "lcd4"):
-        r = clamp_roi(lcds_cfg.get(key))
-        if r is None:
-            lcd_vals.append("")
-            continue
-        x1, y1, x2, y2 = r
-        sub = gray[y1:y2, x1:x2]
-        try:
-            val = _read_lcd(sub, digits=digits, inverted=inverted, frac_thr=seg_thr)
-        except Exception:
-            val = ""
-        lcd_vals.append(val)
-
-    # ---- Read LEDs
-    led_states = {}
-    for name, roi in (leds_cfg or {}).items():
-        r = clamp_roi(roi)
-        if r is None:
-            led_states[name] = False
-            continue
-        x1, y1, x2, y2 = r
-        sub = img[y1:y2, x1:x2]
-        try:
-            led_states[name] = bool(
-                _led_on(
-                    sub,
-                    sat_thr=int(thr_led.get("sat", 110)),
-                    val_thr=int(thr_led.get("val", 120)),
-                )
-            )
-        except Exception:
-            led_states[name] = False
-
-    # ---- Build annotated preview
-    annotated = img.copy()
-    th = max(2, int(round(min(h, w) * 0.006)))
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    fs   = max(0.5, min(1.2, min(h, w) / 900.0))
-    shadow = max(1, th // 2)
-
-    # LCD boxes (blue) + labels
-    for key in ("lcd1", "lcd2", "lcd3", "lcd4"):
-        r = clamp_roi(lcds_cfg.get(key))
-        if r:
-            x1, y1, x2, y2 = r
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (60, 180, 255), th)
-            label = key.upper()
-            org = (x1, max(0, y1 - 8))
-            cv2.putText(annotated, label, org, font, fs, (0, 0, 0), shadow + 1, cv2.LINE_AA)
-            cv2.putText(annotated, label, org, font, fs, (60, 180, 255), 1, cv2.LINE_AA)
-
-    # LED boxes (green=ON, red=OFF) + labels
-    for name in ("opr_ctrl", "interlck", "ptfi", "flame", "alarm"):
-        r = clamp_roi(leds_cfg.get(name))
-        if r:
-            x1, y1, x2, y2 = r
-            on = bool(led_states.get(name))
-            color = (0, 255, 0) if on else (0, 0, 255)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, th)
-            label = name.upper()
-            org = (x1, max(0, y1 - 8))
-            cv2.putText(annotated, label, org, font, fs, (0, 0, 0), shadow + 1, cv2.LINE_AA)
-            cv2.putText(annotated, label, org, font, fs, color, 1, cv2.LINE_AA)
-
-    ok, enc = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    preview_b64 = base64.b64encode(enc.tobytes()).decode("ascii") if ok else None
-
-    return jsonify({
-        "lcds": lcd_vals,
-        "leds": led_states,
-        "preview_jpeg_b64": preview_b64
-    })
-
-# ---------- Admin APIs ----------
 @bp.route("/admin")
 def admin_page():
     return render_template("admin.html")
 
-# --- Admin: log tail/download ---
 @bp.get("/api/admin/log/tail")
 def admin_log_tail():
     try:
@@ -515,7 +329,6 @@ def admin_log_download():
         return jsonify({"error": "No log file found"}), 404
     return send_file(str(p), as_attachment=True, download_name=p.name, mimetype="text/plain")
 
-# --- Admin: version/update/rollback/reboot ---
 @bp.get("/api/admin/version")
 def admin_version():
     cur = admin_ops.get_installed_version(current_app)
@@ -546,7 +359,6 @@ def admin_reboot():
         current_app.logger.error("Reboot request failed: %s", resp.get("error"))
     return jsonify(resp), (200 if resp.get("status") == "ok" else 500)
 
-# --- Admin: support bundle + remote uploads ---
 @bp.post("/api/admin/support/bundle")
 def admin_support_bundle():
     data = request.get_json(silent=True) or {}
@@ -557,7 +369,6 @@ def admin_support_bundle():
     dl_url = url_for("config_ui.support_download", filename=bundle_path.name)
     return jsonify({"status": "ok", "download_url": dl_url, "message": msg})
 
-
 @bp.get("/api/admin/support/download/<path:filename>")
 def support_download(filename: str):
     sup = Path(current_app.instance_path) / "support"
@@ -567,10 +378,8 @@ def support_download(filename: str):
 def admin_support_upload():
     data = request.get_json(force=True) or {}
     kind = (data.get("type") or "logs").strip().lower()
-
-    # Optional flags from UI
-    use_latest = bool(data.get("use_latest", True))            # default: reuse latest bundle
-    include = bool(data.get("include_snapshot", True))         # only used if we must create a new bundle
+    use_latest = bool(data.get("use_latest", True))
+    include = bool(data.get("include_snapshot", True))
 
     if kind == "logs":
         ok, msg = admin_ops.upload_logs_to_remote(current_app)
@@ -584,7 +393,6 @@ def admin_support_upload():
     return (jsonify({"status": "ok", "message": msg})
             if ok else
             (jsonify({"status": "error", "error": msg}), 500))
-
 
 @bp.post("/api/admin/support/upload-snapshot")
 def admin_support_upload_snapshot():
@@ -606,7 +414,7 @@ def admin_support_ping_remote():
 
     ok, msg = admin_ops._upload_path_to_remote(current_app, tmpf, "ping")
     return (jsonify({"status": "ok", "message": msg}), 200) if ok else (jsonify({"status": "error", "error": msg}), 500)
-# ---------- Wi-Fi API ----------
+
 @bp.get("/api/wifi/status")
 def api_wifi_status():
     try:
@@ -617,12 +425,10 @@ def api_wifi_status():
         current_app.logger.exception("api_wifi_status failed")
         return jsonify({"status": "error", "error": str(e)}), 500
 
-
 @bp.get("/api/wifi/scan")
 def api_wifi_scan():
     try:
         data = wifi_nm.scan()
-        # Keep both keys for legacy UI compatibility
         if "results" not in data:
             data["results"] = data.get("networks", [])
         data.setdefault("status", "ok")
@@ -630,7 +436,6 @@ def api_wifi_scan():
     except Exception as e:
         current_app.logger.exception("api_wifi_scan failed")
         return jsonify({"status": "error", "error": str(e)}), 500
-
 
 @bp.post("/api/wifi/connect")
 def api_wifi_connect():

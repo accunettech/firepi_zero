@@ -1,15 +1,9 @@
 from __future__ import annotations
-import os
-import time
-import json
-import threading
-from typing import Optional, Dict, Any, List, Tuple
-import yaml
+import os, time, threading, yaml, cv2
 import numpy as np
-import cv2
-
-# same persistent publisher helper you use elsewhere
-from .mqtt_pub import get_publisher  # must provide .publish_json(...) and .close()
+from typing import Optional, Dict, Any, List, Tuple
+from .mqtt_pub import get_publisher
+from services.seg7 import read_lcd_roi
 
 # Keep OpenCV/NumPy threading modest on small devices
 cv2.setNumThreads(1)
@@ -50,10 +44,17 @@ def _open_camera(use_picamera2: bool):
     else:
         # Lazy import for systems without Picamera2
         from picamera2 import Picamera2
+        #from picamera2 import controls
         picam2 = Picamera2()
         cfg = picam2.create_video_configuration(main={"size": (1280, 720)})
         picam2.configure(cfg)
         picam2.start()
+        # Settle/lock AWB if needed:
+        # picam2.set_controls({"AwbMode": controls.AwbMode.Fluorescent})
+        # time.sleep(2)
+        # meta = picam2.capture_metadata()
+        # gains = meta.get("ColourGains")
+        # if gains: picam2.set_controls({"AwbEnable": False, "ColourGains": gains})
         return None, picam2
 
 
@@ -62,15 +63,15 @@ def _read_frame(cap, picam2):
         ok, frame = cap.read()
         if not ok:
             raise RuntimeError("Camera read failed.")
-        return frame
+        return frame  # BGR already
     else:
-        return picam2.capture_array()
+        rgb = picam2.capture_array()
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)  # normalize to BGR
 
 
-# ---------------- ROI + image utils ----------------
 def _crop(frame: np.ndarray, roi: Dict[str, int]) -> np.ndarray:
     """
-    Safely crop using dict roi = {x1,y1,x2,y2}. Returns empty array if bad ROI.
+    Crop using dict roi = {x1,y1,x2,y2}. Returns empty array if bad ROI.
     """
     if frame is None or roi is None:
         return np.empty((0, 0, 3), dtype=np.uint8)
@@ -85,91 +86,6 @@ def _crop(frame: np.ndarray, roi: Dict[str, int]) -> np.ndarray:
     return frame[y1:y2, x1:x2].copy()
 
 
-# ---------------- 7-segment OCR ----------------
-# Map of lit segments -> digit
-# Order: top, upper-left, upper-right, middle, lower-left, lower-right, bottom
-SEG_TO_DIGIT = {
-    (1, 1, 1, 1, 1, 1, 0): "0",
-    (0, 1, 1, 0, 0, 0, 0): "1",
-    (1, 1, 0, 1, 1, 0, 1): "2",
-    (1, 1, 1, 1, 0, 0, 1): "3",
-    (0, 1, 1, 0, 0, 1, 1): "4",
-    (1, 0, 1, 1, 0, 1, 1): "5",
-    (1, 0, 1, 1, 1, 1, 1): "6",
-    (1, 1, 1, 0, 0, 0, 0): "7",
-    (1, 1, 1, 1, 1, 1, 1): "8",
-    (1, 1, 1, 1, 0, 1, 1): "9",
-    (0, 0, 0, 0, 0, 0, 0): " ",  # blank
-}
-
-def _segments_from_digit_roi(bgr_or_gray: np.ndarray, *, inverted: bool, frac_thr: float = 0.10):
-    """
-    Decide ON/OFF for each of 7 segments using Otsu on the Value (brightness) channel.
-    Works well for bright (green) digits on black, and for dark-on-light if inverted=True.
-    """
-    if bgr_or_gray is None or bgr_or_gray.size == 0:
-        return (0, 0, 0, 0, 0, 0, 0)
-
-    # Work on brightness (V in HSV) for colored digits
-    if len(bgr_or_gray.shape) == 3:
-        hsv = cv2.cvtColor(bgr_or_gray, cv2.COLOR_BGR2HSV)
-        chan = hsv[..., 2]
-    else:
-        chan = bgr_or_gray
-
-    h, w = chan.shape[:2]
-    t = max(1, int(h * 0.16))  # segment thickness
-    m = max(1, int(h * 0.06))  # margin
-
-    # Otsu to split bright vs dark in this digit
-    _, bin_img = cv2.threshold(chan, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    if inverted:
-        bin_img = 255 - bin_img
-
-    regions = [
-        (m, m, w - m, m + t),                               # top
-        (m, m, m + t, h // 2),                              # upper-left
-        (w - m - t, m, w - m, h // 2),                      # upper-right
-        (m, h // 2 - t // 2, w - m, h // 2 + t // 2),       # middle
-        (m, h // 2, m + t, h - m),                          # lower-left
-        (w - m - t, h // 2, w - m, h - m),                  # lower-right
-        (m, h - m - t, w - m, h - m),                       # bottom
-    ]
-
-    segs = []
-    for (x1, y1, x2, y2) in regions:
-        y1c, y2c = max(y1, 0), min(y2, h)
-        x1c, x2c = max(x1, 0), min(x2, w)
-        if x2c <= x1c or y2c <= y1c:
-            segs.append(0)
-            continue
-        roi = bin_img[y1c:y2c, x1c:x2c]
-        on_frac = (roi == 255).mean()
-        segs.append(1 if on_frac >= frac_thr else 0)
-    return tuple(segs)
-
-def _decode_digit(bgr_or_gray_digit: np.ndarray, *, inverted: bool, frac_thr: float = 0.10) -> str:
-    segs = _segments_from_digit_roi(bgr_or_gray_digit, inverted=inverted, frac_thr=frac_thr)
-    return SEG_TO_DIGIT.get(segs, "?")
-
-def _read_lcd(bgr_lcd: np.ndarray, *, digits: int = 4, inverted: bool = False, frac_thr: float = 0.10) -> str:
-    """Read exactly `digits` characters (no inline minus)."""
-    if bgr_lcd is None or bgr_lcd.size == 0:
-        return ""
-    h, w = bgr_lcd.shape[:2]
-    if w <= 0 or digits <= 0:
-        return ""
-
-    step = max(1, w // digits)
-    out = []
-    for i in range(digits):
-        x1 = i * step
-        x2 = (i + 1) * step if i < digits - 1 else w
-        droi = bgr_lcd[:, x1:x2]
-        out.append(_decode_digit(droi, inverted=inverted, frac_thr=frac_thr))
-    return "".join(out)
-
-
 # ---------------- LED / sign detection ----------------
 def _led_on_any(bgr_roi: np.ndarray, sat_thr: int = 110, val_thr: int = 120, frac_thr: float = 0.12) -> bool:
     """
@@ -181,15 +97,17 @@ def _led_on_any(bgr_roi: np.ndarray, sat_thr: int = 110, val_thr: int = 120, fra
     hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
     # red
     m1 = cv2.inRange(hsv, np.array([0,   sat_thr, val_thr], np.uint8), np.array([10, 255, 255], np.uint8))
-    m2 = cv2.inRange(hsv, np.array([170, sat_thr, val_thr], np.uint8), np.array([180,255, 255], np.uint8))
+    m2 = cv2.inRange(hsv, np.array([170, sat_thr, val_thr], np.uint8), np.array([180, 255, 255], np.uint8))
     # green
     mg = cv2.inRange(hsv, np.array([40,  sat_thr, val_thr], np.uint8), np.array([90, 255, 255], np.uint8))
     mask = m1 | m2 | mg
     frac = (mask > 0).mean()
     return frac > frac_thr
 
+
 def _led_on(bgr_roi: np.ndarray, sat_thr: int = 110, val_thr: int = 120) -> bool:
     return _led_on_any(bgr_roi, sat_thr=sat_thr, val_thr=val_thr, frac_thr=0.12)
+
 
 def _roi_bright_on_black(bgr_roi: np.ndarray, val_thr: int = 140, sat_min: int = 30, frac_thr: float = 0.08) -> bool:
     """
@@ -267,7 +185,7 @@ class PanelMonitor:
         except Exception:
             pass
 
-        # MQTT: init once, fail fast (keep consistent with solenoid)
+        # MQTT: init once, fail fast
         self._init_mqtt_publisher()
 
         self._stop.clear()
@@ -309,29 +227,30 @@ class PanelMonitor:
             cfg = {}
 
         # Normalize legacy keys
-        if 'seg_threshold' in cfg and 'seg_frac_thr' not in cfg:
-            try:
-                cfg['seg_frac_thr'] = float(cfg.get('seg_threshold', 0.10))
-            except Exception:
-                cfg['seg_frac_thr'] = 0.10
         if 'led_red_thresh' in cfg and 'led_thr' not in cfg:
             t = cfg.get('led_red_thresh') or {}
             cfg['led_thr'] = {'sat': int(t.get('sat',110)), 'val': int(t.get('val',120)), 'frac': 0.12}
+
         # Provide safe defaults if keys are missing
         cfg.setdefault("lcd_rois", {"lcd1": None, "lcd2": None, "lcd3": None, "lcd4": None})
-        cfg.setdefault(
-            "lcd_sign_rois",
-            {"lcd1": None, "lcd2": None, "lcd3": None, "lcd4": None},
-        )
-        cfg.setdefault(
-            "led_rois",
-            {"opr_ctrl": None, "interlck": None, "ptfi": None, "flame": None, "alarm": None},
-        )
+        cfg.setdefault("lcd_sign_rois", {"lcd1": None, "lcd2": None, "lcd3": None, "lcd4": None})
+        cfg.setdefault("led_rois", {
+            "opr_ctrl": None, "interlck": None, "ptfi": None, "flame": None, "alarm": None
+        })
         cfg.setdefault("digit_count_per_lcd", 4)
-        cfg.setdefault("lcd_inverted", False)  # bright-on-dark typical here
-        cfg.setdefault("seg_frac_thr", 0.10)   # fraction of lit pixels per segment
+        cfg.setdefault("lcd_inverted", False)  # retained for compatibility; not used by the new reader
+        cfg.setdefault("seg_threshold", 0.35)     # segment-on threshold for seg7 reader
+        cfg.setdefault("lcd_conf_hold", 0.40)  # hold previous value if avg conf below this
         cfg.setdefault("led_thr", {"sat": 110, "val": 120, "frac": 0.12})
         cfg.setdefault("sign_thr", {"val": 140, "sat_min": 30, "frac": 0.08})
+
+        # Color hints per LCD (top row red, bottom row cyan for your case)
+        cfg.setdefault("lcd_color_hint", {
+            "lcd1": "red",
+            "lcd2": "red",
+            "lcd3": "cyan",
+            "lcd4": "cyan",
+        })
 
         self._cfg = cfg
         self.app.logger.info("PanelMonitor: ROIs loaded from %s", self.rois_path)
@@ -427,32 +346,27 @@ class PanelMonitor:
 
                 cfg = getattr(self, "_cfg", {}) or {}
 
-                inverted = bool(cfg.get("lcd_inverted", False))
                 digits = int(cfg.get("digit_count_per_lcd", 4))
-                seg_frac_thr = float(cfg.get("seg_frac_thr", 0.10))
                 led_thr = cfg.get("led_thr", {"sat": 110, "val": 120, "frac": 0.12})
                 sign_thr = cfg.get("sign_thr", {"val": 140, "sat_min": 30, "frac": 0.08})
                 lcds_cfg = cfg.get("lcd_rois", {}) or {}
                 sign_cfg = cfg.get("lcd_sign_rois", {}) or {}
                 leds_cfg = cfg.get("led_rois", {}) or {}
 
-                # --- read LCDs (digits only) ---
-                lcd_digits: List[str] = []
-                for key in ("lcd1", "lcd2", "lcd3", "lcd4"):
+                # --- read LCDs (digits only, color-aware) ---
+                lcd_digits: list[str] = []
+                hints = (cfg.get("lcd_color_hint") or {})
+                seg_thr = float(cfg.get("seg_threshold", 0.35))
+                digits = int(cfg.get("digit_count_per_lcd", 4))
+
+                for key in ("lcd1","lcd2","lcd3","lcd4"):
                     roi = lcds_cfg.get(key)
                     if not roi:
-                        lcd_digits.append("")
-                        continue
-                    try:
-                        val = _read_lcd(
-                            _crop(frame, roi),
-                            digits=digits,
-                            inverted=inverted,
-                            frac_thr=seg_frac_thr,
-                        )
-                    except Exception:
-                        val = ""
+                        lcd_digits.append(""); continue
+                    tile = _crop(frame, roi)
+                    val, _ = read_lcd_roi(tile, digits, hints.get(key))
                     lcd_digits.append(val)
+
 
                 # --- sign ROIs (minus indicators) ---
                 signs_on: Dict[str, bool] = {}
@@ -535,7 +449,8 @@ class PanelMonitor:
                 )
                 if changed_any:
                     try:
-                        self._pub.publish_json(self._topic_status, payload, qos=0, retain=True)
+                        if self._pub:
+                            self._pub.publish_json(self._topic_status, payload, qos=0, retain=True)
                     except Exception:
                         self.app.logger.exception("PanelMonitor: MQTT status publish failed")
                     self._last_pub_leds = dict(led_states)

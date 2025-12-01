@@ -37,12 +37,14 @@ class SolenoidMonitor:
         bounce_time: float = 0.05,
         off_delay_s: float = 2.0,
         min_alert_interval_s: int = 10,
+        mute_status_sounds: bool = False
     ):
         self.app = app
         self.pin = pin
         self.bounce_time = bounce_time
         self.off_delay_s = off_delay_s
         self.min_alert_interval_s = min_alert_interval_s
+        self.mute_status_sounds = mute_status_sounds
 
         self._btn: Optional[Button] = None
         self.started = False
@@ -110,6 +112,11 @@ class SolenoidMonitor:
         if self._pub_enabled:
             self._publish_status("started")
             self._publish_state_change(self._last_state, initial=True)
+        
+        try:
+            self.app.sse_hub.publish("health", self.health())
+        except Exception:
+            pass
 
         # Wire callbacks
         self._btn.when_pressed  = self._on_change   # closed -> ON
@@ -128,11 +135,12 @@ class SolenoidMonitor:
             self._sig_reg = True
 
         # Startup audio cue
-        play_audio_pwm_async(
-            "startup_solenoid_activated.mp3" if cur_pressed else "startup_solenoid_deactivated.mp3",
-            is_stock_audio=True,
-            logger=self._log
-        )
+        if not self.mute_status_sounds:
+            play_audio_pwm_async(
+                "startup_solenoid_activated.mp3" if cur_pressed else "startup_solenoid_deactivated.mp3",
+                is_stock_audio=True,
+                logger=self._log
+            )
 
     def stop(self):
         # lifecycle event first (best effort)
@@ -142,7 +150,9 @@ class SolenoidMonitor:
         except Exception:
             pass
 
-        play_audio_pwm_async("shutdown.mp3", is_stock_audio=True, logger=self._log)
+        if not self.mute_status_sounds:
+            play_audio_pwm_async("shutdown.mp3", is_stock_audio=True, logger=self._log)
+            
         try:
             if self._btn:
                 self._btn.close()
@@ -232,6 +242,12 @@ class SolenoidMonitor:
 
             # MQTT state-change event
             self._publish_state_change(state)
+
+            try:
+                self.app.sse_hub.publish("health", self.health())
+            except Exception:
+                self._log.exception("SSE publish failed")
+
 
             # Handle alert/speaker/email/sms/voice logic
             cfg = self._load_cfg()

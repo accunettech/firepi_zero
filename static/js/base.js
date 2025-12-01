@@ -1,3 +1,5 @@
+let __allowProgressShow = false;
+let __progressCount = 0;
 (() => {
   window.$  = (sel) => document.querySelector(sel);
   window.$$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -46,53 +48,100 @@
     el.textContent = text;
   }
 
-  async function refreshHealthBadge() {
+  function formatAgeFromSeconds(deltaSec) {
+    const halfStr = (x) => {
+      const r = Math.round(x * 2) / 2; // nearest 0.5
+      return Number.isInteger(r) ? String(r|0) : String(r);
+    };
+    const d = Math.max(0, Math.floor(deltaSec));
+    if (d < 60) return `${d}s`;
+    if (d < 3600) return `${Math.floor(d / 60)}m`;
+    if (d < 86400) return `${halfStr(d / 3600)}h`;
+    if (d <= 365 * 86400) return `${halfStr(d / 86400)}d`;
+    return `${halfStr(d / (365 * 86400))}y`;
+  }
+
+  function connectHealthSSE() {
     const badge = $("#healthBadge");
     if (!badge) return;
+
     try {
-      const j = await apiGet("/api/health");
-
-      // Prefer explicit state if provided
-      const state = (j.state ?? j.solenoid_state ?? "").toString().toUpperCase();
-      if (state === "ON" || state === "OFF") {
-        const ts = Number(j.last_change_ts); // or j.last_change_s if that's your field
-        let age = "—";
-
-        const halfStr = (x) => {
-          const r = Math.round(x * 2) / 2;              // nearest 0.5
-          return Number.isInteger(r) ? String(r|0) : String(r);
-        };
-
-        if (Number.isFinite(ts) && ts > 0) {
-          const delta = Math.max(0, Math.floor(Date.now() / 1000 - ts)); // seconds
-
-          if (delta < 60) {
-            age = `${delta}s`;
-          } else if (delta < 3600) {
-            age = `${Math.floor(delta / 60)}m`;
-          } else if (delta < 86400) {
-            age = `${halfStr(delta / 3600)}h`;          // nearest half-hour
-          } else if (delta <= 365 * 86400) {            // <= 365 days -> days
-            age = `${halfStr(delta / 86400)}d`;         // nearest half-day
-          } else {
-            age = `${halfStr(delta / (365 * 86400))}y`; // > 365 days -> nearest half-year
-          }
-        }
-        const label = age ? `${state} • ${age}` : state;
-        if (state === "ON") setBadge(badge, "bg-success-subtle text-success-emphasis", label);
-        else setBadge(badge, "bg-danger-subtle text-danger-emphasis", label);
-        return;
+      if (window.__healthES) {
+        window.__healthES.close();
+        window.__healthES = null;
       }
 
-      // Fallback to generic ok flag
-      const ok = j?.status === "ok" || j?.ok === true;
-      if (ok) setBadge(badge, "bg-success-subtle text-success-emphasis", "OK");
-      else setBadge(badge, "bg-danger-subtle text-danger-emphasis", "Error");
-    } catch {
-      setBadge(badge, "bg-warning-subtle text-warning-emphasis", "Unavailable");
+      const es = new EventSource("/events", { withCredentials: false });
+      window.__healthES = es;
+
+      es.addEventListener("open", () => {
+      });
+
+      es.addEventListener("error", () => {
+        console.warn("[sse] error");
+        try { es.close(); } catch {}
+        window.__healthES = null;
+        setTimeout(connectHealthSSE, 5000);
+      });
+
+      es.addEventListener("health", (ev) => {
+        try {
+          const j = JSON.parse(ev.data);
+          renderHealthBadge(j);
+        } catch {}
+      });
+
+      es.addEventListener("snapshot", (ev) => {
+        try {
+          const { version, ts } = JSON.parse(ev.data || '{}');
+          const img = document.getElementById('panelSnapshotImg');
+          if (!img || typeof version !== 'number') return;
+          const u = new URL(img.src, location.href);
+          u.searchParams.set('v', String(version));  // cache-bust
+          img.src = u.toString();
+          const meta = document.getElementById('snapMeta');
+          if (meta) {
+            meta.textContent = ts ? `updated - ${new Date(ts*1000).toLocaleTimeString()}` : ``;
+          }
+        } catch {}
+      });
+    } catch (e) {
+      console.warn("SSE init failed:", e);
     }
   }
 
+  function renderHealthBadge(j) {
+    const badge = $("#healthBadge");
+    if (!badge) return;
+
+    const state = (j.state ?? j.solenoid_state ?? "").toString().toUpperCase();
+    if (state === "ON" || state === "OFF") {
+      const ts = Number(j.last_change_ts);
+      let age = "—";
+      const halfStr = (x) => {
+        const r = Math.round(x * 2) / 2;
+        return Number.isInteger(r) ? String(r|0) : String(r);
+      };
+      if (Number.isFinite(ts) && ts > 0) {
+        const delta = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+        if (delta < 60)       age = `${delta}s`;
+        else if (delta < 3600)age = `${Math.floor(delta / 60)}m`;
+        else if (delta < 86400)age = `${halfStr(delta / 3600)}h`;
+        else if (delta <= 365*86400) age = `${halfStr(delta / 86400)}d`;
+        else                   age = `${halfStr(delta / (365*86400))}y`;
+      }
+      const label = age ? `${state} • ${age}` : state;
+      if (state === "ON") setBadge(badge, "bg-success-subtle text-success-emphasis", label);
+      else setBadge(badge, "bg-danger-subtle text-danger-emphasis", label);
+      return;
+    }
+
+    const ok = j?.status === "ok" || j?.ok === true;
+    if (ok) setBadge(badge, "bg-success-subtle text-success-emphasis", "OK");
+    else setBadge(badge, "bg-danger-subtle text-danger-emphasis", "Error");
+  }
+
+  // --- history ---
   function renderHistory(list, items) {
     list.innerHTML = "";
     if (!Array.isArray(items) || !items.length) {
@@ -132,8 +181,8 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    refreshHealthBadge();
-    setInterval(refreshHealthBadge, 5000);
+    connectHealthSSE();
+    //refreshHealthBadge();
 
     $("#btnRefreshHistory")?.addEventListener("click", () => refreshHistory(100));
     const drawer = document.getElementById("historyDrawer");
@@ -148,7 +197,38 @@
     const el = document.getElementById('progressModal');
     if (!el) return null;
     if (!__progressModalInst) {
-      __progressModalInst = bootstrap.Modal ? new bootstrap.Modal(el, { backdrop: 'static', keyboard: false }) : null;
+      __progressModalInst = 
+// FirePi guard: only allow progressModal to show via showProgress()
+(() => {
+  if (!window.bootstrap || !bootstrap.Modal || bootstrap.Modal.__firepiGuard) return;
+  const P = bootstrap.Modal.prototype;
+  const _show = P.show;
+  const _hide = P.hide;
+  P.show = function(...args){
+    const el = this._element;
+    if (el && el.id === 'progressModal' && !window.__allowProgressShow) {
+      console.warn('[progress] blocked stray show on progressModal');
+      return;
+    }
+    return _show.apply(this, args);
+  };
+  P.hide = function(...args){
+    const el = this._element;
+    const ret = _hide.apply(this, args);
+    if (el && el.id === 'progressModal') {
+      // defensive cleanup
+      el.classList.remove('show');
+      el.style.display = 'none';
+      document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+      document.body.classList.remove('modal-open');
+      document.body.style.removeProperty('overflow');
+      document.body.style.removeProperty('padding-right');
+    }
+    return ret;
+  };
+  bootstrap.Modal.__firepiGuard = true;
+})();
+bootstrap.Modal ? new bootstrap.Modal(el, { backdrop: 'static', keyboard: false }) : null;
     }
     return __progressModalInst;
   }
@@ -161,3 +241,35 @@
   window.hideProgress = () => {
     if (__progressModalInst) __progressModalInst.hide();
   };
+
+
+function showProgress(title='Working…', msg='') {
+  const el = document.getElementById('progressModal');
+  if (!el || !window.bootstrap || !bootstrap.Modal) return;
+  el.querySelector('.modal-title')?.replaceChildren(document.createTextNode(title || ''));
+  el.querySelector('.modal-body')?.replaceChildren(document.createTextNode(msg || ''));
+  const m = bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static', keyboard: false, focus: false });
+  if (el.classList.contains('show')) { __progressCount = Math.max(1, __progressCount); return; }
+  __progressCount++;
+  window.__allowProgressShow = true;
+  try { m.show(); } finally { window.__allowProgressShow = false; }
+}
+
+
+function hideProgress() {
+  const el = document.getElementById('progressModal');
+  if (!el || !window.bootstrap || !bootstrap.Modal) return;
+  __progressCount = Math.max(0, __progressCount - 1);
+  if (__progressCount > 0) return;
+  const m = bootstrap.Modal.getOrCreateInstance(el);
+  try { m.hide(); } catch {}
+  // Defensive cleanup
+  el.classList.remove('show');
+  el.style.display = 'none';
+  el.setAttribute('aria-hidden', 'true');
+  el.removeAttribute('aria-modal');
+  document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+  document.body.classList.remove('modal-open');
+  document.body.style.removeProperty('overflow');
+  document.body.style.removeProperty('padding-right');
+}

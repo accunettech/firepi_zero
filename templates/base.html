@@ -13,7 +13,7 @@
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark mb-4">
     <div class="container d-flex align-items-center justify-content-between">
-      <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.panel_page') }}">
+      <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('config_ui.index') }}">
         <img src="{{ url_for('static', filename='img/ervin_glassworks_logo.png') }}?v={{ config.get('APP_VERSION', 'dev') }}"
              alt="Ervin Glassworks" width="56" height="56" class="rounded-1">
         <span>&nbsp;&nbsp;FirePi</span>
@@ -31,21 +31,13 @@
     <div class="row">
       <aside class="col-12 col-md-3 col-xl-2 mb-4">
         <div class="list-group side-nav sticky-top">
-          <a href="{{ url_for('config_ui.panel_page') }}"
-             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel') and not request.path.startswith('/panel/calibrate') else '' }}">
+          <a href="{{ url_for('config_ui.index') }}"
+             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel') else '' }}">
             <i class="bi bi-speedometer2 me-2"></i>Panel
-          </a>
-          <a href="{{ url_for('config_ui.panel_calibrate') }}"
-             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/panel/calibrate') else '' }}">
-            <i class="bi bi-bounding-box-circles me-2"></i>Panel Calibration
           </a>
           <a href="{{ url_for('config_ui.config_page') }}"
              class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/config') else '' }}">
             <i class="bi bi-gear me-2"></i>Configuration
-          </a>
-          <a href="{{ url_for('config_ui.admin_page') }}"
-             class="list-group-item list-group-item-action {{ 'active' if request.path.startswith('/admin') else '' }}">
-            <i class="bi bi-shield-lock me-2"></i>Administration
           </a>
         </div>
       </aside>
@@ -71,10 +63,6 @@
       <div id="historyList" class="list-group list-group-flush flex-grow-1 overflow-auto"></div>
     </div>
   </div>
-  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/base.js') }}"></script>
-  {% block scripts %}{% endblock %}
-
   <!-- Global progress modal -->
   <div class="modal fade" id="progressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered">
@@ -89,6 +77,9 @@
       </div>
     </div>
   </div>
-
+  {# socket.io client must come before base.js #}
+  <script src="{{ url_for('static', filename='js/base.js') }}?v={{ build_hash|default(0) }}"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.5.3.3.bundle.min.js') }}"></script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

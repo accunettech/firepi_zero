@@ -108,7 +108,7 @@ function bindControls(){
 }
 
 async function loadSnapshot(){
-  try { showProgress('Fetching snapshot', 'Capturing current frame…'); } catch(e){}
+  try { showProgress('Fetching snapshot', 'Capturing current frame...'); } catch(e){}
   try{
     const r = await fetch('/api/panel/snapshot?cb=' + Date.now());
     if (!r.ok) throw new Error(await r.text());
@@ -123,6 +123,8 @@ async function loadSnapshot(){
     img.src = url;
   }catch(e){
     $('#calibError')?.classList.remove('d-none');
+  } finally {
+    try { hideProgress(); } catch(e){}
   }
 }
 
@@ -153,7 +155,8 @@ async function saveRois(){
     seg_threshold: rois.seg_threshold,
     digit_count_per_lcd: rois.digit_count_per_lcd,
     lcd_inverted: !!rois.lcd_inverted,
-    led_red_thresh: { sat: parseInt(rois.led_red_thresh.sat||110,10), val: parseInt(rois.led_red_thresh.val||120,10) }
+    led_red_thresh: { sat: parseInt(rois.led_red_thresh.sat||110,10), val: parseInt(rois.led_red_thresh.val||120,10) },
+    roi_ref_size: { w: img.naturalWidth, h: img.naturalHeight }
   };
   await apiPost('/api/panel/rois', body);
   toast('ROIs saved');
@@ -161,6 +164,15 @@ async function saveRois(){
 
 document.addEventListener('DOMContentLoaded', async () => {
   $('#btnSnapshot')?.addEventListener('click', loadSnapshot);
+
+  const btnClear = $('#btnClearRois');
+  btnClear?.addEventListener('click', () => {
+    if (!rois) rois = { lcd_rois: {}, led_rois: {} };
+    else { rois.lcd_rois = {}; rois.led_rois = {}; }
+    const cr = $('#curRect'); if (cr) cr.textContent = '—';
+    drawOverlay();
+    if (typeof toast === 'function') toast('Cleared ROIs (not yet saved)');
+  });
 
   const btnSave = $('#btnSaveRois');
   btnSave?.addEventListener('click', async ()=>{
@@ -174,8 +186,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnReload?.addEventListener('click', async ()=>{
     const html = btnReload.innerHTML;
     btnReload.disabled = true; btnReload.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Reloading…`;
-    try { showProgress('Reloading worker','Applying ROI settings…'); await apiPost('/api/panel/reload', {}); toast('Worker reloaded'); } catch(e){ toast('Reload failed'); } finally { try{ hideProgress(); }catch(e){} }
-    finally { btnReload.disabled=false; btnReload.innerHTML = html; }
+    try { 
+      showProgress('Reloading worker','Applying ROI settings…'); 
+      await apiPost('/api/panel/reload', {}); 
+      toast('Worker reloaded'); 
+    } catch(e) { 
+      toast('Reload failed'); 
+    } finally { 
+      try{ hideProgress(); }catch(e){}
+      btnReload.disabled=false; btnReload.innerHTML = html; 
+    }
   });
 
   try {
@@ -184,8 +204,137 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (e){
     $('#calibError')?.classList.remove('d-none');
   }
-});
 
+  // ---------- Dry-Run upload & decode (merged) ----------
+  const dryFile = document.getElementById('dryRunFile');
+  const btnUseUploaded = document.getElementById('btnUseUploaded');
+  const btnDryRun = document.getElementById('btnDryRunDecode');
+  const imgPreview = document.getElementById('dryRunPreview');
+
+  let uploadedFileBlob = null;
+
+  const tryShowProgress = (m1, m2) => { try { showProgress(m1, m2); } catch(_){} };
+  const tryHideProgress  = () => { try { hideProgress(); } catch(_){} };
+  const toastOk   = (m) => { try { toast(m); } catch(_) { console.log(m); } };
+  const toastErr  = (m) => { try { errorToast(m); } catch(_) { console.error(m); } };
+
+  if (dryFile) {
+    dryFile.addEventListener('change', (e) => {
+      uploadedFileBlob = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+      if (btnUseUploaded) btnUseUploaded.disabled = !uploadedFileBlob;
+      if (btnDryRun) btnDryRun.disabled = !uploadedFileBlob;
+
+      if (uploadedFileBlob && imgPreview) {
+        const url = URL.createObjectURL(uploadedFileBlob);
+        imgPreview.src = url;
+        imgPreview.classList.remove('d-none');
+      }
+    });
+  }
+
+  async function blobToDataURL(blob) {
+    return await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('read failed'));
+      fr.onload = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  // Loads uploaded image into the same snapshot <img> so you can draw ROIs and save them
+  async function loadImageIntoCalibrationCanvas(dataUrl) {
+    return await new Promise((resolve, reject) => {
+      img.onload = () => {
+        $('#snapMeta').textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+        fitCanvas();
+        drawOverlay();
+        // Let any ROI tooling know a new snapshot has loaded
+        document.dispatchEvent(new CustomEvent('firepi:snapshotLoaded', {
+          detail: { width: img.naturalWidth, height: img.naturalHeight, source: 'uploaded' }
+        }));
+        resolve();
+      };
+      img.onerror = () => reject(new Error('image load failed'));
+      img.src = dataUrl;
+    });
+  }
+
+  btnUseUploaded?.addEventListener('click', async () => {
+    if (!uploadedFileBlob) return;
+    tryShowProgress('Loading uploaded image…');
+    try {
+      const dataUrl = await blobToDataURL(uploadedFileBlob);
+      await loadImageIntoCalibrationCanvas(dataUrl);
+      toastOk('Loaded uploaded image into canvas.');
+    } catch (e) {
+      console.error(e);
+      toastErr('Could not load image into canvas.');
+    } finally {
+      tryHideProgress();
+    }
+  });
+
+  // Helpers to render results to either text or seven-seg mimic if present
+  const setText = (sel, txt) => { const el = document.querySelector(sel); if (el) el.textContent = txt; };
+  function renderSevenSegIfPresent(idx, val) {
+    const el = document.getElementById(`testLcd${idx}`); // legacy seven-seg container
+    if (el && typeof renderSevenSeg === 'function') {
+      renderSevenSeg(el, val || '????', 4);
+    }
+  }
+  function setLedDual(idDry, idLegacy, on) {
+    const e1 = document.getElementById(idDry);
+    if (e1) {
+      e1.classList.toggle('bg-success', !!on);
+      e1.classList.toggle('bg-secondary', !on);
+    }
+    const e2 = document.getElementById(idLegacy); // legacy
+    if (e2) e2.classList.toggle('on', !!on);
+  }
+
+  btnDryRun?.addEventListener('click', async () => {
+    if (!uploadedFileBlob) return;
+    tryShowProgress('Decoding uploaded snapshot…');
+    try {
+      const fd = new FormData();
+      fd.append('image', uploadedFileBlob, uploadedFileBlob.name || 'upload.jpg');
+      const res = await fetch('/api/panel/dry_run', { method: 'POST', body: fd });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.error) throw new Error(j.error || 'Dry-run failed');
+      console.log(j);
+
+      const lcds = j.lcds || ["","","",""];
+      // Text outputs (new)
+      setText('#dry-lcd1', lcds[0] || '----');
+      setText('#dry-lcd2', lcds[1] || '----');
+      setText('#dry-lcd3', lcds[2] || '----');
+      setText('#dry-lcd4', lcds[3] || '----');
+      // Legacy seven-seg containers (if present)
+      renderSevenSegIfPresent(1, lcds[0]);
+      renderSevenSegIfPresent(2, lcds[1]);
+      renderSevenSegIfPresent(3, lcds[2]);
+      renderSevenSegIfPresent(4, lcds[3]);
+
+      const leds = j.leds || {};
+      setLedDual('dry-led-opr',       'test-led-opr_ctrl', !!leds.opr_ctrl);
+      setLedDual('dry-led-interlck',  'test-led-interlck', !!leds.interlck);
+      setLedDual('dry-led-ptfi',      'test-led-ptfi',     !!leds.ptfi);
+      setLedDual('dry-led-flame',     'test-led-flame',    !!leds.flame);
+      setLedDual('dry-led-alarm',     'test-led-alarm',    !!leds.alarm);
+
+      toastOk('Dry-run decode complete.');
+    } catch (e) {
+      console.error(e);
+      toastErr(e.message || 'Dry-run failed');
+    } finally {
+      tryHideProgress();
+    }
+  });
+
+}); // end DOMContentLoaded
+
+
+// ------- Seven-seg helpers you already had (kept intact) -------
 const DIGIT_SEGMENTS = {
   "0":[1,1,1,1,1,1,0], "1":[0,1,1,0,0,0,0], "2":[1,1,0,1,1,0,1], "3":[1,1,1,1,0,0,1],
   "4":[0,1,1,0,0,1,1], "5":[1,0,1,1,0,1,1], "6":[1,0,1,1,1,1,1], "7":[1,1,1,0,0,0,0],
@@ -212,56 +361,4 @@ function setLed(id, on) {
   if (el) el.classList.toggle('on', !!on);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const fileInput = document.getElementById('testFile');
-  if (!fileInput) return;
-
-  fileInput.addEventListener('change', async (e) => {
-    const f = e.target.files && e.target.files[0];
-    if (!f) return;
-
-    // Show the uploaded image in the snapshot area so you can draw ROIs on it
-    const localUrl = URL.createObjectURL(f);
-    img.onload = () => {
-      URL.revokeObjectURL(localUrl);
-      $('#snapMeta').textContent = `${img.naturalWidth}×${img.naturalHeight}`;
-      fitCanvas();
-      drawOverlay();
-    };
-    img.src = localUrl;
-
-    const fd = new FormData();
-    fd.append('image', f);
-
-    try {
-      const r = await fetch('/api/panel/debug/decode', { method: 'POST', body: fd });
-      if (!r.ok) throw new Error(await r.text());
-      const j = await r.json();
-
-      // Seven-seg results
-      renderSevenSeg(document.getElementById('testLcd1'), (j.lcds && j.lcds[0]) || '????', 4);
-      renderSevenSeg(document.getElementById('testLcd2'), (j.lcds && j.lcds[1]) || '????', 4);
-      renderSevenSeg(document.getElementById('testLcd3'), (j.lcds && j.lcds[2]) || '????', 4);
-      renderSevenSeg(document.getElementById('testLcd4'), (j.lcds && j.lcds[3]) || '????', 4);
-
-      // LEDs
-      const leds = j.leds || {};
-      setLed('test-led-opr_ctrl', !!leds['opr_ctrl']);
-      setLed('test-led-interlck', !!leds['interlck']);
-      setLed('test-led-ptfi', !!leds['ptfi']);
-      setLed('test-led-flame', !!leds['flame']);
-      setLed('test-led-alarm', !!leds['alarm']);
-
-      // Annotated preview
-      if (j.preview_jpeg_b64) {
-        document.getElementById('testPreview').src = 'data:image/jpeg;base64,' + j.preview_jpeg_b64;
-      }
-      toast('Dry-run complete');
-    } catch (e2) {
-      toast('Dry-run failed: ' + (e2.message || e2));
-    } finally {
-      // allow picking the same file again
-      e.target.value = '';
-    }
-  });
-});
+// ------- REMOVED old #testFile upload handler (replaced by dry-run controls) -------
